@@ -100,7 +100,7 @@ def transform_bids_image(reading_img, transform='crop'):
 class BidsMriBrainDataset(Dataset):
     """Dataset of subjects of CLINICA (baseline only) from BIDS"""
 
-    def __init__(self, subjects_df_path, caps_dir, transform=None, classes=2, rescale='crop'):
+    def __init__(self, subjects_df_path, caps_dir, transform=None, classes=3, rescale='crop'):
         """
 
         :param subjects_df_path: Path to a TSV file with the list of the subjects in the dataset
@@ -110,23 +110,21 @@ class BidsMriBrainDataset(Dataset):
             if 2 --> ['CN', 'AD']
             if 3 --> ['CN', 'MCI', 'AD']
         """
-        #if type(subjects_df_path) is str:
-         #   self.subjects_df = pd.read_csv(subjects_df_path, sep='\t')
-        #elif type(subjects_df_path) is pd.DataFrame:
-         #   self.subjects_df = subjects_df_path
-        #else:
-         #   raise ValueError('Please enter a path or a Dataframe as first argument')
-        self.subjects_df = subjects_df_path
+        if type(subjects_df_path) is str:
+            self.subjects_df = pd.read_csv(subjects_df_path, sep='\t')
+        elif type(subjects_df_path) is pd.DataFrame:
+            self.subjects_df = subjects_df_path
+        else:
+            raise ValueError('Please enter a path or a Dataframe as first argument')
+
         self.caps_dir = caps_dir
         self.transform = transform
 
         if classes == 2:
             self.diagnosis_code = {'CN': 0, 'AD': 1}
-        elif classes == 4:
-            self.diagnosis_code = {'CN': 0, 'MCI': 1, 'LMCI': 1, 'AD': 3}
+        elif classes == 3:
+            self.diagnosis_code = {'CN': 0, 'MCI': 1, 'LMCI': 1, 'AD': 2}
 
-        #self.extension = '_ses-M00_T1w.nii.gz'
-        #self.folder_path = path.join('ses-M00', 'anat')
         self.rescale = rescale
 
     def __len__(self):
@@ -134,49 +132,29 @@ class BidsMriBrainDataset(Dataset):
 
     def __getitem__(self, subj_idx):
         subj_name = self.subjects_df.loc[subj_idx, 'participant_id']
-        diagnosis = self.subjects_df.loc[subj_idx, 'diagnosis_sc']
-        paths = []
-        for x in os.listdir(path.join(self.caps_dir,subj_name)):
-            if x.startswith('ses'):
-                paths.append(path.join(self.caps_dir,subj_name,x,'anat',subj_name+'_'+x+'_T1w.nii.gz'))
-        #cohort = self.subjects_df.loc[subj_idx, 'cohort']
-        #img_name = subj_name + self.extension
-
-        #data_path = path.join(self.caps_dir, bids_cohort_dict[cohort])
-        #data_path = path.join(self.caps_dir)
-        #img_path = path.join(data_path, subj_name, self.folder_path, img_name)
-        samples=[]
-        #print(paths)
-        sessions_df = pd.read_csv(path.join(self.caps_dir,subj_name,subj_name+'_sessions.tsv'), sep='\t')
-        #sessions_df = pd.read_csv(path.join('/scratch/yx2105/shared/MLH/data/clinical_bids',subj_name,subj_name+'_sessions.tsv'), sep='\t')
-        for x in paths:
+        #print(subjects_df,"subjects_df")
+        #diagnosis = self.subjects_df.loc[subj_idx, 'diagnosis_sc']
+        image_path = self.subjects_df.loc[subj_idx, 'ses']
+        sessions_df = pd.read_csv(path.join(self.caps_dir,subj_name,subj_name+'_sessions.tsv'), sep='\t')            
+        reading_image = nib.load(image_path)
+        session = image_path[-18:-13]
+        session_time = int(image_path[-13:-11]) + 12
+        session = session + str(session_time)
+        if (sessions_df['session_id'] == session).any() :
+            diagnosis_after = sessions_df[(sessions_df['session_id'] == session)].diagnosis.item()
+        else:
+            diagnosis_after = 'no_diagnosis'
+        image = transform_bids_image(reading_image, self.rescale)
             
-            reading_image = nib.load(x)
-            session = x[-18:-13]
-            session_time = int(x[-13:-11]) + 12
-            session = session + str(session_time)
-            if (sessions_df['session_id'] == session).any() :
-                index = sessions_df[(sessions_df['session_id'] == session)].diagnosis.item()
-            else:
-                index = 'no_diagnosis'
-            #print(session,index)
-            #dia_12_month = sessions_df.loc[index, 'diagnosis']
-            #print(reading_image)
-            image = transform_bids_image(reading_image, self.rescale)
-            
-        # Convert diagnosis to int
-        #if type(diagnosis) is str:
-        #    diagnosis = self.diagnosis_code[diagnosis]
-
-            sample = {'image': image, 'orig_diagnosis': diagnosis,'diagnosis_after_12_months':index, 'name': subj_name}
-            #print(sample)
-            if self.transform:
-                sample = self.transform(sample)
-            samples.append(sample)
-
-        return samples
+        if type(diagnosis_after) is str:
+            diagnosis = self.diagnosis_code[diagnosis_after]
+        #image=image.unsqueeze(0)
+        sample = {'image': image, 'diagnosis_after_12_months':diagnosis, 'name': subj_name}
+        if self.transform:
+            sample = self.transform(sample)
+        return sample
+    
     def subjects_list(self):
-
         return self.subjects_df['participant_id'].values.tolist()
 
     def diagnosis_list(self):
@@ -210,39 +188,61 @@ class ToTensor(object):
         np.nan_to_num(image, copy=False)
 
         if self.gpu:
-            return {'image': torch.from_numpy(image[np.newaxis, :]).float(),
-                    'diagnosis': torch.from_numpy(np.array(diagnosis)),
+            image= torch.from_numpy(image[np.newaxis, :]).float()
+            #image = image.unsqueeze(0)
+            return {'image': image,
+                    'diagnosis_after_12_months': torch.from_numpy(np.array(diagnosis)),
                     'name': name}
         else:
-            return {'image': torch.from_numpy(image[np.newaxis, :]).float(),
-                    'diagnosis': diagnosis,
+            image= torch.from_numpy(image[np.newaxis, :]).float()
+            #image = image.unsqueeze(0)
+            return {'image': image,
+                    'diagnosis_after_12_months': diagnosis,
                     'name': name}
 
 
+class MeanNormalization(object):
+    """Normalize images using a .nii file with the mean values of all the subjets"""
+
+    def __init__(self, mean_path):
+        assert path.isfile(mean_path)
+        self.mean_path = mean_path
+
+    def __call__(self, sample):
+        reading_mean = nib.load(self.mean_path)
+        mean_img = reading_mean.get_data()
+        return {'image': sample['image'] - mean_img,
+                'diagnosis': sample['diagnosis'],
+                'name': sample['name']}
 
 
+class LeftHippocampusSegmentation(object):
 
+    def __init__(self):
+        self.x_min = 68
+        self.x_max = 88
+        self.y_min = 60
+        self.y_max = 80
+        self.z_min = 28
+        self.z_max = 48
 
+    def __call__(self, sample):
+        image, diagnosis = sample['image'], sample['diagnosis']
+        hippocampus = image[self.x_min:self.x_max:, self.y_min:self.y_max:, self.z_min:self.z_max:]
+        return {'image': hippocampus,
+                'diagnosis': sample['diagnosis'],
+                'name': sample['name']}
 
 
 if __name__ == '__main__':
     import torchvision
-
-    #subjects_tsv_path = '/Volumes/aramis-projects/elina.thibeausutre/data/2-classes/dataset-ADNI+AIBL+corrOASIS.tsv'
-    #caps_path = '/Volumes/aramis-projects/CLINICA/CLINICA_datasets/BIDS'
-    #subjects_tsv_path='/vast/di2078/AGAIN/participants.tsv'    
-    #caps_path='/vast/di2078/AGAIN'
-    #subjects_tsv_path='/scratch/yx2105/shared/MLH/data/bids/participants.tsv'
-    #caps_path='/scratch/yx2105/shared/MLH/data/bids'
+    train_path='/scratch/di2078/shared/MLH/data/train.csv'
+    test_path='/scratch/di2078/shared/MLH/data/test.csv'
+    valid_path='/scratch/di2078/shared/MLH/data/valid.csv'
+    caps_path='/scratch/di2078/shared/MLH/data/AGAIN'
     sigma = 0
     composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),])
-           
-        # ToTensor()
+    trainset = BidsMriBrainDataset(train_path, caps_path, transform=composed)
+    testset = BidsMriBrainDataset(test_path, caps_path, transform=composed)
+    validset = BidsMriBrainDataset(valid_path, caps_path, transform=composed)
     
-    
-    #dataset = BidsMriBrainDataset(subjects_tsv_path, caps_path, transform=composed)
-    dataset = BidsMriBrainDataset(subjects_1, caps_path, transform=composed)
-    for x in range(len(dataset)):
-        print(dataset[x])
-           
-

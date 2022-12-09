@@ -165,10 +165,9 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
     results_df = pd.DataFrame(columns=['epoch', 'training_time', 'acc_train', 'acc_validation'])
     with open(filename, 'w') as f:
         results_df.to_csv(f, index=False, sep='\t')
-    #changed acc_valid to acc_train
+
     t0 = time()
-    #acc_valid_max = 0
-    acc_train_max = 0
+    acc_valid_max = 0
     best_epoch = 0
     best_model = copy(model)
 
@@ -181,14 +180,15 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
             if gpu:
-                inputs, labels = data['image'].cuda(), data['diagnosis_after_12_months'].cuda()
+                inputs, labels = data['image'].cuda(), data['diagnosis'].cuda()
             else:
-                inputs, labels = data['image'], data['diagnosis_after_12_months']
+                inputs, labels = data['image'], data['diagnosis']
             optimizer.zero_grad()
             outputs = model(inputs, train=True)
             loss = criterion(outputs, labels)
             loss.backward()
-            optimizer.step()            
+            optimizer.step()
+
             # print statistics
             running_loss += loss.item()
             if i % 10 == 9:  # print every 10 mini-batches
@@ -201,28 +201,24 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
         if results_path is not None and epoch % save_interval == save_interval - 1:
             training_time = time() - t0
             acc_train = test(model, trainloader, gpu)
-            #acc_valid = test(model, validloader, gpu)
-            row = np.array([epoch + 1, training_time, acc_train#, acc_valid
-                           ]).reshape(1, -1)
+            acc_valid = test(model, validloader, gpu)
+            row = np.array([epoch + 1, training_time, acc_train, acc_valid]).reshape(1, -1)
 
-            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'acc_train', #'acc_validation'
-                                               ])
+            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'acc_train', 'acc_validation'])
             with open(filename, 'a') as f:
                 row_df.to_csv(f, header=False, index=False, sep='\t')
 
-            #if acc_valid > acc_valid_max:
-            if acc_train > acc_train_max:
-                acc_train_max = copy(acc_train)
+            if acc_valid > acc_valid_max:
+                acc_valid_max = copy(acc_valid)
                 best_epoch = copy(epoch)
                 best_model = deepcopy(model)
 
         epoch += 1
 
     return {'training_time': time() - t0,
-            #'best_epoch': best_epoch,
+            'best_epoch': best_epoch,
             'best_model': best_model,
-            #'acc_valid_max': acc_valid_max
-           }
+            'acc_valid_max': acc_valid_max}
 
 
 def test(model, dataloader, gpu=False, verbose=True):
@@ -242,9 +238,9 @@ def test(model, dataloader, gpu=False, verbose=True):
     with torch.no_grad():
         for sample in dataloader:
             if gpu:
-                images, diagnoses = sample['image'].cuda(), sample['diagnosis_after_12_months'].cuda()
+                images, diagnoses = sample['image'].cuda(), sample['diagnosis'].cuda()
             else:
-                images, diagnoses = sample['image'], sample['diagnosis_after_12_months']
+                images, diagnoses = sample['image'], sample['diagnosis']
             outputs = model(images)
             _, predicted = torch.max(outputs.data, 1)
             predicted_list = predicted_list + predicted.tolist()
@@ -276,52 +272,49 @@ def cross_validation(model, trainset,testset,validset, folds=10, batch_size=4, *
     from torch.utils.data import DataLoader
 
     #cross_val = CrossValidationSplit(dataset, cv=folds, stratified=True, shuffle_diagnosis=True)
-    #accuracies = np.zeros(folds)
+    accuracies = np.zeros(folds)
     results_path = train_args['results_path']
     t0 = time()
 
-    #for i in range(folds):
-        #print('Fold ' + str(i + 1))
-        #train_args['results_path'] = path.join(results_path, 'fold-' + str(i + 1))
-        #if not path.exists(train_args['results_path']):
-         #   os.makedirs(train_args['results_path'])
+    for i in range(folds):
+        print('Fold ' + str(i + 1))
+        train_args['results_path'] = path.join(results_path, 'fold-' + str(i + 1))
+        if not path.exists(train_args['results_path']):
+            os.makedirs(train_args['results_path'])
 
         #trainset, validset, testset = cross_val(dataset)
         #print(dataset[len(dataset)-1],len(dataset),"LENGTH")
         #testset = dataset[0:210]
         #validset = dataset[210:420]
         #trainset = dataset[420:len(dataset)]
-    print('Length training set', len(trainset))
-    print('Length validation set', len(validset))
-    print('Length test set', len(testset))
-    #changed num_workers from 4 to batch_size
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4)
-    validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=4)
-    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)
-    #trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=0)
-    #validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=0)
-    #testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0)
+        print('Length training set', len(trainset))
+        print('Length validation set', len(validset))
+        print('Length test set', len(testset))
 
-    model.apply(weights_init)
-    parameters_found = train(model, trainloader, validloader, **train_args)
-    #acc_test = test(parameters_found['best_model'], testloader, train_args['gpu'], verbose=False)
-    #acc_valid = test(parameters_found['best_model'], validloader, train_args['gpu'], verbose=False)
-    acc_train = test(parameters_found['best_model'], trainloader, train_args['gpu'], verbose=False)
+        trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4)
+        validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=4)
+        testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)
 
-    text_file = open(path.join(train_args['results_path'], 'fold_output.txt'), 'w')
-        #text_file.write('Fold: %i \n' % (i + 1))
-    text_file.write('Best epoch: %i \n' % (parameters_found['best_epoch'] + 1))
-    text_file.write('Time of training: %d s \n' % parameters_found['training_time'])
-    text_file.write('Accuracy on training set: %.2f %% \n' % acc_train)
-    #text_file.write('Accuracy on validation set: %.2f %% \n' % acc_valid)
-    #text_file.write('Accuracy on test set: %.2f %% \n' % acc_test)
-    text_file.close()
+        model.apply(weights_init)
+        parameters_found = train(model, trainloader, validloader, **train_args)
+        acc_test = test(parameters_found['best_model'], testloader, train_args['gpu'], verbose=False)
+        acc_valid = test(parameters_found['best_model'], validloader, train_args['gpu'], verbose=False)
+        acc_train = test(parameters_found['best_model'], trainloader, train_args['gpu'], verbose=False)
 
-    print('Accuracy of the network on the %i train images: %.2f %%' % (len(trainset), acc_train))
-    #print('Accuracy of the network on the %i validation images: %.2f %%' % (len(validset), acc_valid))
-    #print('Accuracy of the network on the %i test images: %.2f %%' % (len(testset), acc_test))
+        text_file = open(path.join(train_args['results_path'], 'fold_output.txt'), 'w')
+        text_file.write('Fold: %i \n' % (i + 1))
+        text_file.write('Best epoch: %i \n' % (parameters_found['best_epoch'] + 1))
+        text_file.write('Time of training: %d s \n' % parameters_found['training_time'])
+        text_file.write('Accuracy on training set: %.2f %% \n' % acc_train)
+        text_file.write('Accuracy on validation set: %.2f %% \n' % acc_valid)
+        text_file.write('Accuracy on test set: %.2f %% \n' % acc_test)
+        text_file.close()
 
-        #accuracies[i] = acc_test
+        print('Accuracy of the network on the %i train images: %.2f %%' % (len(trainset), acc_train))
+        print('Accuracy of the network on the %i validation images: %.2f %%' % (len(validset), acc_valid))
+        print('Accuracy of the network on the %i test images: %.2f %%' % (len(testset), acc_test))
+
+        accuracies[i] = acc_test
 
     training_time = time() - t0
     text_file = open(path.join(results_path, 'model_output.txt'), 'w')

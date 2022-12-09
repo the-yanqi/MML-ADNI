@@ -11,7 +11,9 @@ from skimage.transform import resize
 from scipy.ndimage.filters import gaussian_filter
 
 
-
+bids_cohort_dict = {'ADNI': 'ADNI_BIDS_T1_PET',
+                    'AIBL': 'AIBL_BIDS',
+                    'OASIS': 'OASIS_BIDS_new'}
 minimum_size = np.array([145, 230, 200])
 maximum_size = np.array([235, 280, 280])
 
@@ -110,13 +112,13 @@ class BidsMriBrainDataset(Dataset):
             if 2 --> ['CN', 'AD']
             if 3 --> ['CN', 'MCI', 'AD']
         """
-        #if type(subjects_df_path) is str:
-         #   self.subjects_df = pd.read_csv(subjects_df_path, sep='\t')
-        #elif type(subjects_df_path) is pd.DataFrame:
-         #   self.subjects_df = subjects_df_path
-        #else:
-         #   raise ValueError('Please enter a path or a Dataframe as first argument')
-        self.subjects_df = subjects_df_path
+        if type(subjects_df_path) is str:
+            self.subjects_df = pd.read_csv(subjects_df_path, sep='\t')
+        elif type(subjects_df_path) is pd.DataFrame:
+            self.subjects_df = subjects_df_path
+        else:
+            raise ValueError('Please enter a path or a Dataframe as first argument')
+
         self.caps_dir = caps_dir
         self.transform = transform
 
@@ -146,7 +148,7 @@ class BidsMriBrainDataset(Dataset):
         #data_path = path.join(self.caps_dir)
         #img_path = path.join(data_path, subj_name, self.folder_path, img_name)
         samples=[]
-        #print(paths)
+        print(paths)
         sessions_df = pd.read_csv(path.join(self.caps_dir,subj_name,subj_name+'_sessions.tsv'), sep='\t')
         #sessions_df = pd.read_csv(path.join('/scratch/yx2105/shared/MLH/data/clinical_bids',subj_name,subj_name+'_sessions.tsv'), sep='\t')
         for x in paths:
@@ -206,7 +208,7 @@ class ToTensor(object):
         self.gpu = gpu
 
     def __call__(self, sample):
-        image, diagnosis, name = sample['image'], sample['diagnosis_after_12_months'], sample['name']
+        image, diagnosis, name = sample['image'], sample['diagnosis'], sample['name']
         np.nan_to_num(image, copy=False)
 
         if self.gpu:
@@ -219,10 +221,37 @@ class ToTensor(object):
                     'name': name}
 
 
+class MeanNormalization(object):
+    """Normalize images using a .nii file with the mean values of all the subjets"""
+
+    def __init__(self, mean_path):
+        assert path.isfile(mean_path)
+        self.mean_path = mean_path
+
+    def __call__(self, sample):
+        reading_mean = nib.load(self.mean_path)
+        mean_img = reading_mean.get_data()
+        return {'image': sample['image'] - mean_img,
+                'diagnosis': sample['diagnosis'],
+                'name': sample['name']}
 
 
+class LeftHippocampusSegmentation(object):
 
+    def __init__(self):
+        self.x_min = 68
+        self.x_max = 88
+        self.y_min = 60
+        self.y_max = 80
+        self.z_min = 28
+        self.z_max = 48
 
+    def __call__(self, sample):
+        image, diagnosis = sample['image'], sample['diagnosis']
+        hippocampus = image[self.x_min:self.x_max:, self.y_min:self.y_max:, self.z_min:self.z_max:]
+        return {'image': hippocampus,
+                'diagnosis': sample['diagnosis'],
+                'name': sample['name']}
 
 
 if __name__ == '__main__':
@@ -230,19 +259,27 @@ if __name__ == '__main__':
 
     #subjects_tsv_path = '/Volumes/aramis-projects/elina.thibeausutre/data/2-classes/dataset-ADNI+AIBL+corrOASIS.tsv'
     #caps_path = '/Volumes/aramis-projects/CLINICA/CLINICA_datasets/BIDS'
-    #subjects_tsv_path='/vast/di2078/AGAIN/participants.tsv'    
-    #caps_path='/vast/di2078/AGAIN'
+    subjects_tsv_path='/vast/di2078/AGAIN/participants.tsv'
+    caps_path='/vast/di2078/AGAIN'
     #subjects_tsv_path='/scratch/yx2105/shared/MLH/data/bids/participants.tsv'
     #caps_path='/scratch/yx2105/shared/MLH/data/bids'
     sigma = 0
-    composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),])
-           
-        # ToTensor()
-    
-    
-    #dataset = BidsMriBrainDataset(subjects_tsv_path, caps_path, transform=composed)
-    dataset = BidsMriBrainDataset(subjects_1, caps_path, transform=composed)
-    for x in range(len(dataset)):
-        print(dataset[x])
-           
+    composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),
+                                               # ToTensor()
+                                               ])
 
+    dataset = BidsMriBrainDataset(subjects_tsv_path, caps_path, transform=composed)
+    print(dataset[103])
+    print(len(dataset[103][0]))
+    # lengths = []
+    # for i in range(len(dataset)):
+    #     image = dataset[i]['image']
+    #     lengths.append(np.shape(image))
+    #     if i % 100 == 99:
+    #         print(i + 1, '/', len(dataset))
+    #
+    # lengths = np.unique(np.array(lengths), axis=0)
+    # print(lengths)
+    # length_df = pd.DataFrame(lengths)
+    # length_df.to_csv('/Users/elina.thibeausutre/Documents/data/lengths_BIDS.tsv', sep='\t')
+    idx = 0

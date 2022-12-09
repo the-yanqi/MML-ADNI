@@ -6,7 +6,280 @@ import os
 import pandas as pd
 
 
+class ConvLBP(nn.Conv3d):
+    """
+    A 3D convolution layer with fixed binary weights
 
+    source: https://github.com/dizcza/lbcnn.pytorch/
+    """
+    def __init__(self, in_channels, out_channels, kernel_size=3, sparsity=0.5):
+        super().__init__(in_channels, out_channels, kernel_size, padding=1, bias=False)
+        weights = next(self.parameters())
+        matrix_proba = torch.FloatTensor(weights.data.shape).fill_(0.5)
+        binary_weights = torch.bernoulli(matrix_proba) * 2 - 1
+        mask_inactive = torch.rand(matrix_proba.shape) > sparsity
+        binary_weights.masked_fill_(mask_inactive, 0)
+        weights.data = binary_weights
+        weights.requires_grad = False
+
+
+class DiagnosisClassifier(nn.Module):
+    """
+    Classifier for a binary classification task
+
+    """
+    def __init__(self, n_classes=2):
+        super(DiagnosisClassifier, self).__init__()
+        self.pool = nn.MaxPool3d(2, 2)  # Subsampling
+        self.conv1 = nn.Conv3d(1, 6, 4)
+        self.conv2 = nn.Conv3d(6, 16, 4)
+        self.conv3 = nn.Conv3d(16, 32, 5)
+        self.fc1 = nn.Linear(32 * 12 * 15 * 12, 10000)
+        self.fc2 = nn.Linear(10000, 5000)
+        self.fc3 = nn.Linear(5000, 1000)
+        self.fc4 = nn.Linear(1000, 200)
+        self.fc5 = nn.Linear(200, 60)
+        self.fc6 = nn.Linear(60, n_classes)
+
+    def forward(self, x, train=False):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))
+
+        x = x.view(-1, 32 * 12 * 15 * 12)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        x = F.relu(self.fc4(x))
+        x = F.relu(self.fc5(x))
+        x = self.fc6(x)
+        return x
+
+
+class BasicGPUClassifier(nn.Module):
+    """
+    Classifier for a binary classification task
+
+    """
+    def __init__(self, dropout=0.1, n_classes=2, bids=False):
+        super(BasicGPUClassifier, self).__init__()
+        self.pool = nn.MaxPool3d(2, 2)  # Subsampling
+        self.pool2 = nn.MaxPool3d(2, 2, padding=1)
+        self.conv1 = nn.Conv3d(1, 8, 4)
+        self.conv2 = nn.Conv3d(8, 16, 4)
+        self.conv3 = nn.Conv3d(16, 32, 5)
+        self.conv4 = nn.Conv3d(32, 64, 4)
+        self.fc1 = nn.Linear(64 * 5 * 7 * 5, 5000)
+        self.fc2 = nn.Linear(5000, 1000)
+        self.fc3 = nn.Linear(1000, 200)
+        self.fc4 = nn.Linear(200, 60)
+        self.fc5 = nn.Linear(60, n_classes)
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, x, train=False):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))
+        x = self.pool2(F.relu(self.conv4(x)))
+
+        x = x.view(-1, 64 * 5 * 7 * 5)
+        if train:
+            x = self.dropout(x)
+        x = F.relu(self.fc1(x))
+        if train:
+            x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        if train:
+            x = self.dropout(x)
+        x = F.relu(self.fc3(x))
+        if train:
+            x = self.dropout(x)
+        x = F.relu(self.fc4(x))
+        if train:
+            x = self.dropout(x)
+        x = self.fc5(x)
+        return x
+
+
+class SimonyanClassifier(nn.Module):
+    """
+    Classifier for a binary classification task
+
+    """
+    def __init__(self, n_classes=2):
+        super(SimonyanClassifier, self).__init__()
+        self.pool = nn.MaxPool3d(2, 2, padding=1)  # Subsampling
+        self.conv1 = nn.Conv3d(1, 8, 3)
+        self.conv2 = nn.Conv3d(8, 16, 3)
+        self.conv3 = nn.Conv3d(16, 32, 3)
+        self.conv4 = nn.Conv3d(32, 32, 3)
+        self.conv5 = nn.Conv3d(32, 64, 3)
+        self.conv6 = nn.Conv3d(64, 64, 3)
+        self.fc1 = nn.Linear(64 * 6 * 7 * 6, 5000)
+        self.fc2 = nn.Linear(5000, 1000)
+        self.fc3 = nn.Linear(1000, 200)
+        self.fc4 = nn.Linear(200, 60)
+        self.fc5 = nn.Linear(60, n_classes)
+
+    def forward(self, x, train=False):
+        x = F.relu(self.conv1(x))
+        x = self.pool(x)
+
+        x = self.conv2(x)
+        x = self.pool(F.relu(x))
+
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = self.pool(x)
+
+        x = F.relu(self.conv5(x))
+        x = F.relu(self.conv6(x))
+        x = self.pool(x)
+
+        x = x.view(-1, 64 * 6 * 7 * 6)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        x = F.relu(self.fc4(x))
+        x = self.fc5(x)
+        return x
+
+
+class SimpleClassifier(nn.Module):
+    """
+    Classifier for a binary classification task
+
+    """
+    def __init__(self, n_classes=2):
+        super(SimpleClassifier, self).__init__()
+        self.pool = nn.MaxPool3d(2, 2)  # Subsampling
+        self.conv1 = nn.Conv3d(1, 8, 4)
+        self.conv2 = nn.Conv3d(8, 8, 5)
+        self.conv3 = nn.Conv3d(8, 16, 4)
+        self.conv4 = nn.Conv3d(16, 16, 5)
+        self.conv5 = nn.Conv3d(16, 32, 4)
+        self.conv6 = nn.Conv3d(32, 32, 5)
+        self.fc1 = nn.Linear(32 * 9 * 12 * 9, 5000)
+        self.fc2 = nn.Linear(5000, 800)
+        self.fc3 = nn.Linear(800, 100)
+        self.fc4 = nn.Linear(100, 10)
+        self.fc5 = nn.Linear(10, n_classes)
+
+    def forward(self, x, train=False):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x)
+
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = self.pool(x)
+
+        x = F.relu(self.conv5(x))
+        x = F.relu(self.conv6(x))
+        x = self.pool(x)
+
+        x = x.view(-1, 32 * 9 * 12 * 9)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        x = F.relu(self.fc4(x))
+        x = self.fc5(x)
+        return x
+
+
+class SimpleLBP(nn.Module):
+    """
+    Classifier for a binary classification task
+
+    """
+    def __init__(self, n_classes=2):
+        super(SimpleLBP, self).__init__()
+        # Warning: LBP layers have automatically padding = 1
+
+        self.pool = nn.MaxPool3d(2, 2)  # Subsampling
+        self.conv1 = ConvLBP(1, 8, 4)
+        self.conv2 = nn.Conv3d(8, 8, 5)
+        self.conv3 = ConvLBP(8, 16, 4)
+        self.conv4 = nn.Conv3d(16, 16, 5)
+        self.conv5 = ConvLBP(16, 32, 4)
+        self.conv6 = nn.Conv3d(32, 32, 5)
+        self.fc1 = nn.Linear(32 * 10 * 13 * 10, 5000)
+        self.fc2 = nn.Linear(5000, 800)
+        self.fc3 = nn.Linear(800, 100)
+        self.fc4 = nn.Linear(100, 10)
+        self.fc5 = nn.Linear(10, n_classes)
+
+    def forward(self, x, train=False):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x)
+
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = self.pool(x)
+
+        x = F.relu(self.conv5(x))
+        x = F.relu(self.conv6(x))
+        x = self.pool(x)
+
+        x = x.view(-1, 32 * 10 * 13 * 10)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        x = F.relu(self.fc4(x))
+        x = self.fc5(x)
+        return x
+
+
+class SimpleLBCNN(nn.Module):
+    """
+    Classifier for a binary classification task
+
+    """
+    def __init__(self, n_classes=2):
+        super(SimpleLBCNN, self).__init__()
+        self.pool = nn.MaxPool3d(2, 2)  # Subsampling
+        self.conv1 = ConvLBP(1, 8, 6)
+        self.conv2 = nn.Conv3d(8, 8, 5)
+
+        self.conv3 = ConvLBP(8, 32, 6)
+        self.conv3_1 = nn.Conv3d(32, 16, 1)
+
+        self.conv4 = ConvLBP(16, 32, 5)
+        self.conv4_1 = nn.Conv3d(32, 16, 1)
+
+        self.conv5 = ConvLBP(16, 32, 6)
+        self.conv5_1 = nn.Conv3d(32, 32, 1)
+
+        self.conv6 = ConvLBP(32, 32, 5)
+        self.conv6_1 = nn.Conv3d(32, 32, 1)
+
+        self.fc1 = nn.Linear(32 * 10 * 13 * 10, 5000)
+        self.fc2 = nn.Linear(5000, 800)
+        self.fc3 = nn.Linear(800, 100)
+        self.fc4 = nn.Linear(100, 10)
+        self.fc5 = nn.Linear(10, n_classes)
+
+    def forward(self, x, train=False):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x)
+
+        x = self.conv3_1(F.relu(self.conv3(x)))
+        x = self.conv4_1(F.relu(self.conv4(x)))
+        x = self.pool(x)
+
+        x = self.conv5_1(F.relu(self.conv5(x)))
+        x = self.conv6_1(F.relu(self.conv6(x)))
+        x = self.pool(x)
+
+        x = x.view(-1, 32 * 10 * 13 * 10)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        x = F.relu(self.fc4(x))
+        x = self.fc5(x)
+        return x
 
 
 class LocalBriefNet(nn.Module):
@@ -121,8 +394,7 @@ class VGG(nn.Module):
         x = self.fc2(x)
         return x
 def train(model, trainloader, validloader, epochs=1000, save_interval=5, results_path=None, model_name='model', tol=0.0,
-          gpu=False, lr=0.1):
-    #changed learning rate
+          gpu=False, lr=0.0001):
     """
     Training a model using a validation set to find the best parameters
 
@@ -205,20 +477,20 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
 
 
 if __name__ == '__main__':
-    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
+    from data_loader import BidsMriBrainDataset, ToTensor, GaussianSmoothing
     from training_functions import cross_validation
     import torchvision
     import argparse
-    #print("STARTING......?")
+
     parser = argparse.ArgumentParser()
 
     # Mandatory arguments
-    #parser.add_argument("train_path", type=str,
-     #                   help='path to your list of subjects for training')
+    parser.add_argument("train_path", type=str,
+                        help='path to your list of subjects for training')
     parser.add_argument("results_path", type=str,
                         help="where the outputs are stored")
-    #parser.add_argument("caps_path", type=str,
-     #                   help="path to your caps folder")
+    parser.add_argument("caps_path", type=str,
+                        help="path to your caps folder")
 
     # Network structure
     parser.add_argument("--classifier", type=str, default='basic',
@@ -269,17 +541,28 @@ if __name__ == '__main__':
     results_path = path.join(args.results_path, args.name)
     if not path.exists(results_path):
         os.makedirs(results_path)
-    #print("STARTING......")
+
     composed = torchvision.transforms.Compose([GaussianSmoothing(sigma=args.sigma), ToTensor(gpu=args.gpu)])
-    train_path='/scratch/di2078/shared/MLH/data/train.csv'
-    test_path='/scratch/di2078/shared/MLH/data/test.csv'
-    valid_path='/scratch/di2078/shared/MLH/data/valid.csv'
-    caps_path='/scratch/di2078/shared/MLH/data/AGAIN'
-    sigma = 0
-    #composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),])
-    trainset = BidsMriBrainDataset(train_path, caps_path, transform=composed)
-    testset = BidsMriBrainDataset(test_path, caps_path, transform=composed)
-    validset = BidsMriBrainDataset(valid_path, caps_path, transform=composed)
+
+    #if args.bids:
+    indices=[0,1,2,3,4,5,6,7,8]
+    print(indices,"indices")
+    subjects = pd.read_csv(args.train_path, sep='\t')
+    subjects_1=subjects.loc[subjects.index[indices]]
+    subjects_2=subjects.loc[subjects.index[indices]]
+    subjects_3=subjects.loc[subjects.index[indices]]
+    #trainset = BidsMriBrainDataset(args.train_path, args.caps_path, classes=args.n_classes,
+    #                                   transform=composed, rescale=args.rescale)
+    trainset = BidsMriBrainDataset(subjects_1, args.caps_path, classes=args.n_classes,
+                                       transform=composed, rescale=args.rescale)
+    print(len(trainset[0]),len(trainset[0][0]),"lengths")
+    valset = BidsMriBrainDataset(subjects_2, args.caps_path, classes=args.n_classes,
+                                       transform=composed, rescale=args.rescale)
+    testset = BidsMriBrainDataset(subjects_3, args.caps_path, classes=args.n_classes,
+                                       transform=composed, rescale=args.rescale)
+    #else:
+     #   trainset = MriBrainDataset(args.train_path, args.caps_path, classes=args.n_classes,
+      #                             transform=composed, on_cluster=args.on_cluster)
 
     if args.classifier == 'basic':
         classifier = DiagnosisClassifier(n_classes=args.n_classes).to(device=device)
@@ -307,5 +590,6 @@ if __name__ == '__main__':
     # Initialization
     # classifier.apply(weights_init)
     # Training
-    best_params = cross_validation(classifier, trainset, validset, testset, batch_size=args.batch_size, folds=args.cross_validation, epochs=args.epochs, results_path=results_path, model_name=args.name,
+    best_params = cross_validation(classifier, trainset,valset,testset, batch_size=args.batch_size, folds=args.cross_validation,
+                                   epochs=args.epochs, results_path=results_path, model_name=args.name,
                                    save_interval=args.save_interval, gpu=args.gpu, lr=lr)
