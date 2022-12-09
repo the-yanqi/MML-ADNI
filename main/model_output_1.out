@@ -1,3 +1,2 @@
 /scratch/di2078/envs_dirs/deep_ADNI/lib/python3.6/site-packages/nilearn/__init__.py:69: FutureWarning: Python 3.6 support is deprecated and will be removed in release 0.10 of Nilearn. Consider switching to Python 3.8 or 3.9.
   _python_deprecation_warnings()
-slurmstepd: error: *** JOB 27907404 ON gr043 CANCELLED AT 2022-12-09T05:26:18 ***

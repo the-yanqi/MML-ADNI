@@ -175,8 +175,8 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
     # The program stops when the network learnt the training data
     epoch = 0
     acc_train = 0
-    
-    while epoch < epochs and acc_train < 100 - tol:
+    epochs=100
+    while epoch < epochs: #and acc_train < 100 - tol:
 
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
@@ -205,8 +205,8 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
             row = np.array([epoch + 1, training_time, acc_train#, acc_valid
                            ]).reshape(1, -1)
 
-            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'acc_train', #'acc_validation'
-                                               ])
+            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'acc_train'])#, #'acc_validation'
+                                               
             with open(filename, 'a') as f:
                 row_df.to_csv(f, header=False, index=False, sep='\t')
 
@@ -219,7 +219,7 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
         epoch += 1
 
     return {'training_time': time() - t0,
-            #'best_epoch': best_epoch,
+            'best_epoch': best_epoch,
             'best_model': best_model,
             #'acc_valid_max': acc_valid_max
            }
@@ -326,5 +326,5 @@ def cross_validation(model, trainset,testset,validset, folds=10, batch_size=4, *
     training_time = time() - t0
     text_file = open(path.join(results_path, 'model_output.txt'), 'w')
     text_file.write('Time of training: %d s \n' % training_time)
-    text_file.write('Mean test accuracy: %.2f %% \n' % np.mean(accuracies))
+    #text_file.write('Mean test accuracy: %.2f %% \n' % np.mean(accuracies))
     text_file.close()
