@@ -174,6 +174,8 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
 
+            if i ==10:
+                break
             inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)      
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -193,8 +195,8 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
             # print statistics
             running_loss += loss.item()
             if i % 5 == 4:  # print every 10 mini-batches
-                print('Training epoch %d / step %d  loss: %f' %
-                      (epoch + 1,  i + 1, running_loss))
+                print('Training epoch %d : step %d / %d loss: %f' %
+                      (epoch + 1,  i + 1, len(trainloader),running_loss))
                 running_loss = 0.0
         
         print('Finished Epoch: %d' % (epoch + 1))
@@ -222,7 +224,7 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
                 best_model = deepcopy(model)
 
                 torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
-                np.save(os.path.join(results_path,"predictions_best_val.pkl"), all_prediction_scores)
+                np.save(os.path.join(results_path,"predictions_best_val"), all_prediction_scores)
         epoch += 1
 
     return {'training_time': time() - t0,
@@ -249,7 +251,6 @@ def test(model, dataloader, device, verbose=True):
     # The test must not interact with the learning
     with torch.no_grad():
         for step, sample in enumerate(dataloader):
-
             images, diagnoses = sample['image'].to(device), sample['diagnosis_after_12_months'].to(device)
             outputs = model(images)
             # save for compute train acc
@@ -289,7 +290,7 @@ def compute_balanced_accuracy(predicted_list, truth_list):
 
     return acc 
 
-def run(model, trainset,testset,validset, optimizer, device, folds=10, batch_size=4, **train_args):
+def run(model, trainset,validset,testset, optimizer, device, folds=10, batch_size=4, **train_args):
     from torch.utils.data import DataLoader
 
 

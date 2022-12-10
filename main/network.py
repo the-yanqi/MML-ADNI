@@ -322,15 +322,14 @@ if __name__ == '__main__':
         os.makedirs(results_path)
     #print("STARTING......")
     composed = torchvision.transforms.Compose([GaussianSmoothing(sigma=args.sigma), ToTensor(gpu=args.gpu)])
-    train_path='/scratch/di2078/shared/MLH/data/train.csv'
-    test_path='/scratch/di2078/shared/MLH/data/test.csv'
-    valid_path='/scratch/di2078/shared/MLH/data/valid.csv'
-    caps_path='/scratch/di2078/shared/MLH/data/AGAIN'
+    train_path='/scratch/yx2105/shared/MLH/data/train.csv'
+    test_path='/scratch/yx2105/shared/MLH/data/test.csv'
+    valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
     sigma = 0
     #composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),])
-    trainset = BidsMriBrainDataset(train_path, caps_path, transform=composed)
-    testset = BidsMriBrainDataset(test_path, caps_path, transform=composed)
-    validset = BidsMriBrainDataset(valid_path, caps_path, transform=composed)
+    trainset = BidsMriBrainDataset(train_path, transform=composed)
+    testset = BidsMriBrainDataset(test_path, transform=composed)
+    validset = BidsMriBrainDataset(valid_path, transform=composed)
 
     if args.classifier == 'basic':
         classifier = DiagnosisClassifier(n_classes=args.n_classes).to(device=device)

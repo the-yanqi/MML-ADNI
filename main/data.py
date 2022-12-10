@@ -100,7 +100,7 @@ def transform_bids_image(reading_img, transform='crop'):
 class BidsMriBrainDataset(Dataset):
     """Dataset of subjects of CLINICA (baseline only) from BIDS"""
 
-    def __init__(self, subjects_df_path, caps_dir, transform=None, classes=3, rescale='crop'):
+    def __init__(self, subjects_df_path, transform=None, classes=3, rescale='crop'):
         """
 
         :param subjects_df_path: Path to a TSV file with the list of the subjects in the dataset
@@ -111,19 +111,18 @@ class BidsMriBrainDataset(Dataset):
             if 3 --> ['CN', 'MCI', 'AD']
         """
         if type(subjects_df_path) is str:
-            self.subjects_df = pd.read_csv(subjects_df_path, sep='\t')
+            self.subjects_df = pd.read_csv(subjects_df_path, index_col=0, header=0)
         elif type(subjects_df_path) is pd.DataFrame:
             self.subjects_df = subjects_df_path
         else:
             raise ValueError('Please enter a path or a Dataframe as first argument')
 
-        self.caps_dir = caps_dir
         self.transform = transform
 
         if classes == 2:
             self.diagnosis_code = {'CN': 0, 'AD': 1}
         elif classes == 3:
-            self.diagnosis_code = {'CN': 0, 'AD': 1, 'MCI': 2, 'LMCI': 2}
+            self.diagnosis_code = {'CN': 0, 'AD': 1, 'MCI': 2, 'LMCI': 2,'EMCI':2}
 
         self.rescale = rescale
 
@@ -132,20 +131,11 @@ class BidsMriBrainDataset(Dataset):
 
     def __getitem__(self, subj_idx):
         subj_name = self.subjects_df.loc[subj_idx, 'participant_id']
-        #print(subjects_df,"subjects_df")
-        #diagnosis = self.subjects_df.loc[subj_idx, 'diagnosis_sc']
-        image_path = self.subjects_df.loc[subj_idx, 'ses']
-        sessions_df = pd.read_csv(path.join(self.caps_dir,subj_name,subj_name+'_sessions.tsv'), sep='\t')            
+        image_path = self.subjects_df.loc[subj_idx, 'img_dir']
         reading_image = nib.load(image_path)
-        session = image_path[-18:-13]
-        session_time = int(image_path[-13:-11]) + 12
-        session = session + str(session_time)
-        if (sessions_df['session_id'] == session).any() :
-            diagnosis_after = sessions_df[(sessions_df['session_id'] == session)].diagnosis.item()
-        else:
-            diagnosis_after = 'no_diagnosis'
         image = transform_bids_image(reading_image, self.rescale)
-            
+
+        diagnosis_after = self.subjects_df.loc[subj_idx, 'diagnosis_12month']
         if type(diagnosis_after) is str:
             diagnosis = self.diagnosis_code[diagnosis_after]
         #image=image.unsqueeze(0)
@@ -238,11 +228,10 @@ if __name__ == '__main__':
     import torchvision
     train_path='/scratch/di2078/shared/MLH/data/train.csv'
     test_path='/scratch/di2078/shared/MLH/data/test.csv'
-    valid_path='/scratch/di2078/shared/MLH/data/valid.csv'
-    caps_path='/scratch/di2078/shared/MLH/data/AGAIN'
+    valid_path='/scratch/di2078/shared/MLH/data/val.csv'
     sigma = 0
     composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),])
-    trainset = BidsMriBrainDataset(train_path, caps_path, transform=composed)
-    testset = BidsMriBrainDataset(test_path, caps_path, transform=composed)
-    validset = BidsMriBrainDataset(valid_path, caps_path, transform=composed)
+    trainset = BidsMriBrainDataset(train_path, transform=composed)
+    testset = BidsMriBrainDataset(test_path, transform=composed)
+    validset = BidsMriBrainDataset(valid_path, transform=composed)
     
