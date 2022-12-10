@@ -1,6 +1,7 @@
 import torch
-import torch.optim as optim
 import torch.nn as nn
+import torch.nn.functional as F
+
 from time import time
 from os import path
 from copy import copy, deepcopy
@@ -123,13 +124,6 @@ class CrossValidationSplit:
         return training_set, validation_set, test_set
 
 
-def weights_init(m):
-    """Initialize the weights of convolutional and fully connected layers"""
-    if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
-        init.xavier_normal_(m.weight.data)
-        init.xavier_normal_(m.weight.data)
-
-
 def adjust_learning_rate(optimizer, value):
     """Divides the learning rate by the wanted value"""
     lr_0 = optimizer.param_groups[0]['lr']
@@ -138,8 +132,7 @@ def adjust_learning_rate(optimizer, value):
         param_group['lr'] = lr
 
 
-def train(model, trainloader, validloader, epochs=1000, save_interval=5, results_path=None, model_name='model', tol=0.0,
-          gpu=False, lr=0.0001):
+def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=None, model_name='model', tol=0.0):
     """
     Training a model using a validation set to find the best parameters
 
@@ -158,74 +151,89 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
         epoch of best accuracy for the validation set (int)
         parameters of the model corresponding to the epoch of best accuracy
     """
-    filename = path.join(results_path, model_name + '.tsv')
+    filename = path.join(results_path, 'performance.csv')
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr=lr)
-    results_df = pd.DataFrame(columns=['epoch', 'training_time', 'acc_train', 'acc_validation'])
+
+    results_df = pd.DataFrame(columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
     with open(filename, 'w') as f:
         results_df.to_csv(f, index=False, sep='\t')
     #changed acc_valid to acc_train
     t0 = time()
-    #acc_valid_max = 0
-    acc_train_max = 0
+    acc_valid_max = 0
     best_epoch = 0
     best_model = copy(model)
-
+    print('Before training epoch')
     # The program stops when the network learnt the training data
     epoch = 0
-    acc_train = 0
-    epochs=100
+    acc_valid = 0
     while epoch < epochs: #and acc_train < 100 - tol:
-
+        loss_train = []
+        predicted_list = []
+        truth_list = []
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
-            if gpu:
-                inputs, labels = data['image'].cuda(), data['diagnosis_after_12_months'].cuda()
-            else:
-                inputs, labels = data['image'], data['diagnosis_after_12_months']
+            if i == 10:
+                break
+            inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)      
             optimizer.zero_grad()
-            outputs = model(inputs, train=True)
+            outputs = model(inputs)
             loss = criterion(outputs, labels)
+            
             loss.backward()
-            optimizer.step()            
+            optimizer.step()    
+
+            loss_train.append(loss.item())
+
+            # save for compute train acc
+            preds_score = F.softmax(outputs, 1)
+            _, predicted = torch.max(preds_score, 1)
+            predicted_list = predicted_list + predicted.tolist()
+            truth_list = truth_list + labels.tolist()
+
             # print statistics
             running_loss += loss.item()
-            if i % 10 == 9:  # print every 10 mini-batches
-                print('[%d, %d] loss: %f' %
-                      (epoch + 1, i + 1, running_loss))
+            if i % 5 == 4:  # print every 10 mini-batches
+                print('Training epoch %d / step %d  loss: %f' %
+                      (epoch + 1,  i + 1, running_loss))
                 running_loss = 0.0
-
+        
         print('Finished Epoch: %d' % (epoch + 1))
 
+        # save performance
         if results_path is not None and epoch % save_interval == save_interval - 1:
+            # compute train acc
+            acc_train = compute_balanced_accuracy(predicted_list, truth_list)
+            print('Training ACC: {}'.format(acc_train))
+
             training_time = time() - t0
-            acc_train = test(model, trainloader, gpu)
-            #acc_valid = test(model, validloader, gpu)
-            row = np.array([epoch + 1, training_time, acc_train#, acc_valid
+            acc_valid, all_prediction_scores = test(model, validloader, device=device)
+
+            row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
                            ]).reshape(1, -1)
 
-            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'acc_train'])#, #'acc_validation'
+            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
                                                
             with open(filename, 'a') as f:
                 row_df.to_csv(f, header=False, index=False, sep='\t')
 
-            #if acc_valid > acc_valid_max:
-            if acc_train > acc_train_max:
-                acc_train_max = copy(acc_train)
+            if acc_valid > acc_valid_max:
+                acc_valid_max = copy(acc_valid)
                 best_epoch = copy(epoch)
                 best_model = deepcopy(model)
 
+                torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
+                np.save(os.path.join(results_path,"predictions_best_val.pkl"), all_prediction_scores)
         epoch += 1
 
     return {'training_time': time() - t0,
             'best_epoch': best_epoch,
             'best_model': best_model,
-            #'acc_valid_max': acc_valid_max
+            'acc_valid_max': acc_valid_max
            }
 
 
-def test(model, dataloader, gpu=False, verbose=True):
+def test(model, dataloader, device, verbose=True):
     """
     Computes the balanced accuracy of the model
 
@@ -237,19 +245,32 @@ def test(model, dataloader, gpu=False, verbose=True):
 
     predicted_list = []
     truth_list = []
-
+    all_prediction_scores = []
+    
     # The test must not interact with the learning
     with torch.no_grad():
-        for sample in dataloader:
-            if gpu:
-                images, diagnoses = sample['image'].cuda(), sample['diagnosis_after_12_months'].cuda()
-            else:
-                images, diagnoses = sample['image'], sample['diagnosis_after_12_months']
+        for step, sample in enumerate(dataloader):
+
+            images, diagnoses = sample['image'].to(device), sample['diagnosis_after_12_months'].to(device)
             outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
+            # save for compute train acc
+            pred_scores = F.softmax(outputs,1)
+
+            all_prediction_scores.append(pred_scores)
+            _, predicted = torch.max(pred_scores, 1)
             predicted_list = predicted_list + predicted.tolist()
             truth_list = truth_list + diagnoses.tolist()
+            print('Step {} / total {} processed'.format(step, len(dataloader)))
 
+    acc = compute_balanced_accuracy(predicted_list, truth_list)
+    if verbose:
+        print('Validation ACC: ' + str(acc))
+
+    all_prediction_scores = torch.cat(all_prediction_scores,0).cpu().data.numpy()
+
+    return acc, all_prediction_scores
+
+def compute_balanced_accuracy(predicted_list, truth_list):
     # Computation of the balanced accuracy
     component = len(np.unique(truth_list))
 
@@ -266,31 +287,16 @@ def test(model, dataloader, gpu=False, verbose=True):
         diags_represented.append(diag_represented)
 
     acc = acc * 100 / component
-    if verbose:
-        print('Accuracy of diagnosis: ' + str(acc))
 
-    return acc
+    return acc 
 
-
-def cross_validation(model, trainset,testset,validset, folds=10, batch_size=4, **train_args):
+def run(model, trainset,testset,validset, optimizer, device, folds=10, batch_size=4, **train_args):
     from torch.utils.data import DataLoader
 
-    #cross_val = CrossValidationSplit(dataset, cv=folds, stratified=True, shuffle_diagnosis=True)
-    #accuracies = np.zeros(folds)
+
     results_path = train_args['results_path']
     t0 = time()
 
-    #for i in range(folds):
-        #print('Fold ' + str(i + 1))
-        #train_args['results_path'] = path.join(results_path, 'fold-' + str(i + 1))
-        #if not path.exists(train_args['results_path']):
-         #   os.makedirs(train_args['results_path'])
-
-        #trainset, validset, testset = cross_val(dataset)
-        #print(dataset[len(dataset)-1],len(dataset),"LENGTH")
-        #testset = dataset[0:210]
-        #validset = dataset[210:420]
-        #trainset = dataset[420:len(dataset)]
     print('Length training set', len(trainset))
     print('Length validation set', len(validset))
     print('Length test set', len(testset))
@@ -298,33 +304,31 @@ def cross_validation(model, trainset,testset,validset, folds=10, batch_size=4, *
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4)
     validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=4)
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)
-    #trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=0)
-    #validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=0)
-    #testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0)
+    
+    print('Loading complete.')
 
-    model.apply(weights_init)
-    parameters_found = train(model, trainloader, validloader, **train_args)
+    parameters_found = train(model, trainloader, validloader, optimizer, device, **train_args)
     #acc_test = test(parameters_found['best_model'], testloader, train_args['gpu'], verbose=False)
     #acc_valid = test(parameters_found['best_model'], validloader, train_args['gpu'], verbose=False)
-    acc_train = test(parameters_found['best_model'], trainloader, train_args['gpu'], verbose=False)
+    #acc_train = test(parameters_found['best_model'], trainloader, device=device, verbose=False)
 
-    text_file = open(path.join(train_args['results_path'], 'fold_output.txt'), 'w')
-        #text_file.write('Fold: %i \n' % (i + 1))
-    text_file.write('Best epoch: %i \n' % (parameters_found['best_epoch'] + 1))
-    text_file.write('Time of training: %d s \n' % parameters_found['training_time'])
-    text_file.write('Accuracy on training set: %.2f %% \n' % acc_train)
-    #text_file.write('Accuracy on validation set: %.2f %% \n' % acc_valid)
-    #text_file.write('Accuracy on test set: %.2f %% \n' % acc_test)
-    text_file.close()
+    # text_file = open(path.join(train_args['results_path'], 'fold_output.txt'), 'w')
+    #     #text_file.write('Fold: %i \n' % (i + 1))
+    # text_file.write('Best epoch: %i \n' % (parameters_found['best_epoch'] + 1))
+    # text_file.write('Time of training: %d s \n' % parameters_found['training_time'])
+    # text_file.write('Accuracy on training set: %.2f %% \n' % acc_train)
+    # #text_file.write('Accuracy on validation set: %.2f %% \n' % acc_valid)
+    # #text_file.write('Accuracy on test set: %.2f %% \n' % acc_test)
+    # text_file.close()
 
-    print('Accuracy of the network on the %i train images: %.2f %%' % (len(trainset), acc_train))
-    #print('Accuracy of the network on the %i validation images: %.2f %%' % (len(validset), acc_valid))
-    #print('Accuracy of the network on the %i test images: %.2f %%' % (len(testset), acc_test))
+    # print('Accuracy of the network on the %i train images: %.2f %%' % (len(trainset), acc_train))
+    # #print('Accuracy of the network on the %i validation images: %.2f %%' % (len(validset), acc_valid))
+    # #print('Accuracy of the network on the %i test images: %.2f %%' % (len(testset), acc_test))
 
-        #accuracies[i] = acc_test
+    #     #accuracies[i] = acc_test
 
-    training_time = time() - t0
-    text_file = open(path.join(results_path, 'model_output.txt'), 'w')
-    text_file.write('Time of training: %d s \n' % training_time)
-    #text_file.write('Mean test accuracy: %.2f %% \n' % np.mean(accuracies))
-    text_file.close()
+    # training_time = time() - t0
+    # text_file = open(path.join(results_path, 'model_output.txt'), 'w')
+    # text_file.write('Time of training: %d s \n' % training_time)
+    # #text_file.write('Mean test accuracy: %.2f %% \n' % np.mean(accuracies))
+    # text_file.close()

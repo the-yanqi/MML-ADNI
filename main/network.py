@@ -4,10 +4,16 @@ import torch.nn.functional as F
 from os import path
 import os
 import pandas as pd
+import torch.nn.init as init
+import torch.optim as optim
 
 
 
-
+def weights_init(m):
+    """Initialize the weights of convolutional and fully connected layers"""
+    if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
+        init.xavier_normal_(m.weight.data)
+        init.xavier_normal_(m.weight.data)
 
 class LocalBriefNet(nn.Module):
 
@@ -86,13 +92,15 @@ class VGG(nn.Module):
     def __init__(self, n_classes=2):
         super(VGG, self).__init__()
         self.pool = nn.MaxPool3d(2, 2)
-        self.conv1 = nn.Conv3d(1, 32, 3, padding=1)
-        self.conv2 = nn.Conv3d(32, 64, 3, padding=1)
-        self.conv3 = nn.Conv3d(64, 128, 3, padding=1)
-        self.conv4 = nn.Conv3d(128, 128, 3, padding=1)
-        self.conv5 = nn.Conv3d(128, 256, 3, padding=1)
-        self.conv6 = nn.Conv3d(256, 256, 3, padding=1)
-        self.conv7 = nn.Conv3d(256, 32, 1)
+        self.conv1 = nn.Conv3d(1, 32*2, 3, padding=1)
+        self.conv2 = nn.Conv3d(32*2, 64*2, 3, padding=1)
+        self.conv3 = nn.Conv3d(64*2, 128*2, 3, padding=1)
+        self.conv4 = nn.Conv3d(128*2, 128*2, 3, padding=1)
+        self.conv5 = nn.Conv3d(128*2, 256*2, 3, padding=1)
+        self.conv6 = nn.Conv3d(256*2, 256*2, 3, padding=1)
+        self.conv8 = nn.Conv3d(256*2, 256*2, 3, padding=1)
+        self.conv9 = nn.Conv3d(256*2, 256*2, 3, padding=1)
+        self.conv7 = nn.Conv3d(256*2, 32, 1)
         self.fc1 = nn.Linear(32 * 3 * 4 * 3, 100)
         self.fc2 = nn.Linear(100, n_classes)
 
@@ -111,8 +119,8 @@ class VGG(nn.Module):
         x = F.relu(self.conv6(x))
         x = self.pool(x)
 
-        x = F.relu(self.conv6(x))
-        x = F.relu(self.conv6(x))
+        x = F.relu(self.conv8(x))
+        x = F.relu(self.conv9(x))
         x = self.pool(x)
 
         x = F.relu(self.conv7(x))
@@ -120,6 +128,48 @@ class VGG(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
+
+class CNNModel(nn.Module):
+    def __init__(self,n_classes):
+        super(CNNModel, self).__init__()
+        
+        self.conv_layer1 = self._conv_layer_set(1, 32)
+        self.conv_layer2 = self._conv_layer_set(32, 64)
+        self.conv_layer3 = self._conv_layer_set(64, 128)
+        self.conv_layer4 = self._conv_layer_set(128, 128)
+        self.fc1 = nn.Linear(7*9*7*128, 128)
+        self.fc2 = nn.Linear(128, n_classes)
+        self.relu = nn.LeakyReLU()
+        self.batch=nn.BatchNorm1d(128)
+        self.drop=nn.Dropout(p=0.15)       
+        self.flatten = nn.Flatten() 
+        
+    def _conv_layer_set(self, in_c, out_c):
+        conv_layer = nn.Sequential(
+        nn.Conv3d(in_c, out_c, kernel_size=(3, 3, 3), padding=1),
+        nn.LeakyReLU(),
+        nn.MaxPool3d((2, 2, 2)),
+        )
+        return conv_layer
+    
+
+    def forward(self, x):
+        # Set 1
+        out = self.conv_layer1(x)
+        out = self.conv_layer2(out)
+        out = self.conv_layer3(out)
+        out = self.conv_layer4(out)
+        out = self.flatten(out)
+        out = self.fc1(out)
+        out = self.relu(out)
+        out = self.batch(out)
+        out = self.drop(out)
+        out = self.fc2(out)
+        
+        return out
+
+
+
 def train(model, trainloader, validloader, epochs=1000, save_interval=5, results_path=None, model_name='model', tol=0.0,
           gpu=False, lr=0.1):
     #changed learning rate
@@ -206,7 +256,7 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
 
 if __name__ == '__main__':
     from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
-    from training_functions import cross_validation
+    from training_functions import run
     import torchvision
     import argparse
     #print("STARTING......?")
@@ -234,9 +284,9 @@ if __name__ == '__main__':
                         help='Action to rescale the BIDS without deforming the images')
 
     # Training arguments
-    parser.add_argument("-e", "--epochs", type=int, default=2,
+    parser.add_argument("-e", "--epochs", type=int, default=10,
                         help="number of loops on the whole dataset")
-    parser.add_argument('-lr', '--learning_rate', type=float, default=1,
+    parser.add_argument('-lr', '--learning_rate', type=float, default=1.0,
                         help='the learning rate of the optimizer (*0.00005)')
     parser.add_argument('-cv', '--cross_validation', type=int, default=10,
                         help='cross validation parameter')
@@ -258,6 +308,7 @@ if __name__ == '__main__':
                         help='to work on the cluster of the ICM')
 
     args = parser.parse_args()
+
 
     if args.gpu and torch.cuda.is_available():
         device = torch.device('cuda')
@@ -301,11 +352,15 @@ if __name__ == '__main__':
         classifier = LocalBriefNet3(n_classes=args.n_classes).to(device=device)
     elif args.classifier == 'vgg':
         classifier = VGG(n_classes=args.n_classes).to(device=device)
+    elif args.classifier == 'cnn':
+        classifier = CNNModel(n_classes=args.n_classes).to(device=device)
     else:
         raise ValueError('Unknown classifier')
 
     # Initialization
-    # classifier.apply(weights_init)
+    classifier.apply(weights_init)
+    optimizer = optim.Adam(filter(lambda param: param.requires_grad, classifier.parameters()), lr=lr,weight_decay=1e-4)
+
     # Training
-    best_params = cross_validation(classifier, trainset, validset, testset, batch_size=args.batch_size, folds=args.cross_validation, epochs=args.epochs, results_path=results_path, model_name=args.name,
-                                   save_interval=args.save_interval, gpu=args.gpu, lr=lr)
+    best_params = run(classifier, trainset, validset, testset, optimizer, device=device, batch_size=args.batch_size, folds=args.cross_validation, epochs=args.epochs, results_path=results_path, model_name=args.name,
+                                   save_interval=args.save_interval)

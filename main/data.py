@@ -123,7 +123,7 @@ class BidsMriBrainDataset(Dataset):
         if classes == 2:
             self.diagnosis_code = {'CN': 0, 'AD': 1}
         elif classes == 3:
-            self.diagnosis_code = {'CN': 0, 'MCI': 1, 'LMCI': 1, 'AD': 2}
+            self.diagnosis_code = {'CN': 0, 'AD': 1, 'MCI': 2, 'LMCI': 2}
 
         self.rescale = rescale
 
