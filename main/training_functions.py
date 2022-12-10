@@ -174,8 +174,6 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
 
-            if i ==10:
-                break
             inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)      
             optimizer.zero_grad()
             outputs = model(inputs)
