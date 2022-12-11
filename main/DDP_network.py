@@ -73,7 +73,7 @@ def compute_balanced_accuracy(predicted_list, truth_list):
 
     acc = acc * 100 / component
 
-    return acc 
+    return acc
 
 
 
@@ -81,7 +81,7 @@ def compute_balanced_accuracy(predicted_list, truth_list):
     
 ####################################################################################
 
-def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_size=512,  epochs=100, results_path='scratch/di2078/results', model_name='model'):
+def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_size=4,  epochs=100, results_path='scratch/di2078/results', model_name='model'):
     from torch.utils.data import DataLoader
     from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
     from training_functions import run
@@ -92,15 +92,15 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
 
     
     ############################################################
-    rank = nr * gpus + gpu 
+    rank = nr * gpus + gpu
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group(                                   
-    backend='nccl',                                         
-   init_method='env://',                                   
-    world_size=world_size,                              
-    rank=rank                                               
-    )                                                          
+    dist.init_process_group(
+    backend='nccl',
+   init_method='env://',
+    world_size=world_size,
+    rank=rank
+    )
     ############################################################
     
     torch.manual_seed(0)
@@ -116,7 +116,7 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
     trainset = BidsMriBrainDataset(train_path, transform=composed)
     testset = BidsMriBrainDataset(test_path, transform=composed)
     validset = BidsMriBrainDataset(valid_path, transform=composed)
-    batch_size=512
+    batch_size=4
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         trainset,num_replicas=world_size,rank=rank)
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=train_sampler)
@@ -161,7 +161,7 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
     with open(filename, 'w') as f:
         results_df.to_csv(f, index=False, sep='\t')
     #changed acc_valid to acc_train
-    #t0 = time()
+
     acc_valid_max = 0
     best_epoch = 0
     best_model = copy(model)
@@ -176,17 +176,16 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
 
-            if i ==10:
-                break
+
             
-            #inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device) 
-            inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True) 
+            #inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)
+            inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True)
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             
             loss.backward()
-            optimizer.step()    
+            optimizer.step()
 
             loss_train.append(loss.item())
 
@@ -239,7 +238,7 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
 
     #parameters_found = train_DDP(gpu, model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=results_path, model_name='model', tol=0.0)
     
-####################################################################################    
+####################################################################################
 if __name__ == '__main__':
     from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
     from training_functions import run
@@ -325,4 +324,6 @@ if __name__ == '__main__':
     world_size = args.gpus * args.nodes
     torch.multiprocessing.spawn( run_DDP, args=(args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, 10, 100, results_path, 'model'), nprocs=args.gpus)
     
+
+
 
