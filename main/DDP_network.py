@@ -23,7 +23,6 @@ def weights_init(m):
 def test(model, dataloader, metric, classifier, device, verbose=True):
     """
     Computes the balanced accuracy of the model
-
     :param model: the network (subclass of nn.Module)
     :param dataloader: a dataloader wrapping a dataset
     :param gpu: if True a gpu is used
@@ -35,8 +34,8 @@ def test(model, dataloader, metric, classifier, device, verbose=True):
     # The test must not interact with the learning
     with torch.no_grad():
         for step, sample in enumerate(dataloader):
-            if step == 3:
-                break
+            #if step == 3:
+             #   break
             images, diagnoses = sample['image'].cuda(non_blocking=True), sample['diagnosis_after_12_months'].cuda(non_blocking=True)
             if 'joint' == classifier:
                 tab_inputs = sample['tab_data'].cuda(non_blocking=True)
@@ -78,19 +77,26 @@ def compute_balanced_accuracy(predicted_list, truth_list):
 
     return acc
 
+
+
     
     
 ####################################################################################
 
-def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  epochs=100, results_path='scratch/di2078/results', model_name='model', classifier='vgg'):
+def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, optimizer, device, batch_size=4,  epochs=100, results_path='scratch/di2078/results', model_name='model', classifier='vgg'):
     from torch.utils.data import DataLoader
-    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
+    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, MriDataset
     from training_functions import run
     import torchvision
     import torch.multiprocessing as mp
     import torch.distributed as dist
     import time
-
+    import nibabel as nib
+    import numpy as np
+    from nilearn import plotting
+    from skimage.transform import resize
+    from scipy.ndimage.filters import gaussian_filter
+    from nilearn.image import mean_img
     
     ############################################################
     rank = nr * gpus + gpu
@@ -107,16 +113,36 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
     torch.manual_seed(0)
     torch.cuda.set_device(gpu)
     model.cuda(gpu)
+    print(batch_size)
     
     composed = torchvision.transforms.Compose([GaussianSmoothing(0), ToTensor(True)])
     train_path='/scratch/yx2105/shared/MLH/data/train.csv'
     test_path='/scratch/yx2105/shared/MLH/data/test.csv'
     valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
     sigma = 0
-
-    trainset = BidsMriBrainDataset(train_path, transform=composed)
-    testset = BidsMriBrainDataset(test_path, transform=composed)
-    validset = BidsMriBrainDataset(valid_path, transform=composed)
+    
+    trainset = MriDataset(train_list)
+    testset = MriDataset(test_list)
+    validset = MriDataset(valid_list)
+    
+    trainset = MriDataset(train_list)
+    testset = MriDataset(test_list)
+    validset = MriDataset(valid_list)
+    image1 = trainset[100]['image']
+    image2 = trainset[1200]['image']
+    #testing_image = nib.Nifti1Image(image1.numpy(), affine=np.eye(4))
+    #anat = plotting.plot_anat(testing_image, title='subject ' + trainset[100]['name'], cut_coord=None)
+    #anat.savefig('testing_image_1.png')
+    #testing_image = nib.Nifti1Image(image2.numpy(), affine=np.eye(4))
+    #anat = plotting.plot_anat(testing_image, title='subject ' + trainset[1200]['name'], cut_coord=None)
+    #anat.savefig('testing_image_2.png')
+    
+    
+    
+    
+    #trainset = BidsMriBrainDataset(train_path, transform=composed)
+    #testset = BidsMriBrainDataset(test_path, transform=composed)
+    #validset = BidsMriBrainDataset(valid_path, transform=composed)
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         trainset,num_replicas=world_size,rank=rank)
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=train_sampler)
@@ -127,7 +153,7 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
         validset,num_replicas=world_size,rank=rank)
     validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=valid_sampler)
     ############################################################
-    #results_path = train_args['results_path']
+
     t0 = time.time()
 
     print('Length training set', len(trainset))
@@ -135,25 +161,7 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
     print('Length test set', len(testset))
     
     print('Loading complete.')
-    
-    """
-    Training a model using a validation set to find the best parameters
-
-    :param model: The neural network to train
-    :param trainloader: A Dataloader wrapping the training set
-    :param validloader: A Dataloader wrapping the validation set
-    :param epochs: Maximal number of epochs
-    :param save_interval: The number of epochs before a new tests and save
-    :param results_path: the folder where the results are saved
-    :param model_name: the name given to the results files
-    :param tol: the tolerance allowing the model to stop learning, when the training accuracy is (100 - tol)%
-    :param gpu: boolean defining the use of the gpu (if not cpu are used)
-    :param lr: the learning rate used by the optimizer
-    :return:
-        total training time (float)
-        epoch of best accuracy for the validation set (int)
-        parameters of the model corresponding to the epoch of best accuracy
-    """
+   
 
     # prepare metrics
     metric = torchmetrics.Accuracy(task="multiclass", num_classes=3, average='macro')
@@ -166,10 +174,12 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
     criterion = nn.CrossEntropyLoss(weight=class_weights).cuda(gpu)
 
     # prepare result file
+    
     results_df = pd.DataFrame(columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
     filename = path.join(results_path, 'performance.csv')
+    
     with open(filename, 'w') as f:
-        results_df.to_csv(f, index=False, sep='\t')
+            results_df.to_csv(f, index=False, sep='\t')
 
     model.train()
     acc_valid_max = 0
@@ -180,18 +190,16 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
     epoch = 0
     acc_valid = 0
     while epoch < epochs: #and acc_train < 100 - tol:
-        
+
         loss_train = []
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
-            if i == 10:
-                break
             trainloader.sampler.set_epoch(epoch)
             #inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)
             inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True)
             optimizer.zero_grad()
             if 'joint' in classifier:
-                tab_inputs = data['tab_data'].cuda(non_blocking=True)
+                tab_inputs = data['tab_data'].to(device)
                 outputs = model(inputs, tab_inputs)
             else:
                 outputs = model(inputs)
@@ -203,8 +211,8 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
             loss_train.append(loss.item())
 
             # save for compute train acc
-            pred_scores = F.softmax(outputs, 1)
-            acc_train_batch = metric(pred_scores, labels)
+            preds_score = F.softmax(outputs, 1)
+            acc_train_batch = metric(preds_score, labels)
 
             # print statistics
             running_loss += loss.item()
@@ -214,7 +222,7 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
                 print('ACC train at this batch: {}'.format(acc_train_batch))
                 running_loss = 0.0
         
-        print('Training finished Epoch: %d' % (epoch + 1))
+        print('Finished Epoch: %d' % (epoch + 1))
         save_interval = 1
         # save performance
         if results_path is not None and epoch % save_interval == save_interval - 1:
@@ -226,12 +234,12 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
 
             # evaluate and compute val metric
             acc_valid, all_prediction_scores = test(model, validloader, metric, classifier, device=device)
-
-            row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
+            if rank==0:
+                row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
                            ]).reshape(1, -1)
-            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])                                  
-            with open(filename, 'a') as f:
-                row_df.to_csv(f, header=False, index=False, sep='\t')
+                row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])                                  
+                with open(filename, 'a') as f:
+                    row_df.to_csv(f, header=False, index=False, sep='\t')
 
             # save model
             if acc_valid > acc_valid_max:
@@ -242,7 +250,6 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
                     torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
                 np.save(os.path.join(results_path,"predictions_best_val"), all_prediction_scores)
         print('Validation finished Epoch: {}'.format(epoch + 1))
-
         epoch += 1
 
     parameters_found = {'training_time': time() - t0,
@@ -273,8 +280,7 @@ if __name__ == '__main__':
     #####################################################
     parser.add_argument("results_path", type=str,
                         help="where the outputs are stored")
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Number of epochs for training')
+
     # Network structure
     parser.add_argument("--classifier", type=str, default='basic',
                         help='classifier selected')
@@ -307,40 +313,39 @@ if __name__ == '__main__':
     if not path.exists(results_path):
         os.makedirs(results_path)
         
-    #composed = torchvision.transforms.Compose([GaussianSmoothing(sigma=args.sigma), ToTensor(gpu=args.gpu)])
-    #train_path='/scratch/yx2105/shared/MLH/data/train.csv'
-    #test_path='/scratch/yx2105/shared/MLH/data/test.csv'
-    #valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
-    #sigma = 0
 
-    #trainset = BidsMriBrainDataset(train_path, transform=composed)
-    #testset = BidsMriBrainDataset(test_path, transform=composed)
-    #validset = BidsMriBrainDataset(valid_path, transform=composed)
 
 
     if args.classifier == 'vgg':
         classifier = VGG(n_classes=args.n_classes)
     elif args.classifier == 'cnn':
         classifier = CNNModel(n_classes=args.n_classes)
-    elif 'joint' in args.classifier:
-        img_classifier = args.classifier.split('_')[1]
-        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier=img_classifier)
+    elif args.classifier == 'joint':
+        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg')
     else:
         raise ValueError('Unknown classifier')
 
     # Initialization
     classifier.apply(weights_init)
     optimizer = optim.Adam(filter(lambda param: param.requires_grad, classifier.parameters()), lr=lr,weight_decay=1e-4)
-
+    ########################################
     # Training
-    #best_params = run(classifier, trainset, validset, testset, optimizer, device=device, batch_size=args.batch_size, folds=args.cross_validation, epochs=args.epochs, results_path=results_path, model_name=args.name,
-                                   #save_interval=args.save_interval)
-     
+    import pickle
     
-    #best_params = run_DDP(classifier, optimizer, device=device, batch_size=args.batch_size, folds=10, epochs=100, results_path=results_path, model_name='model')
-    world_size = args.gpus * args.nodes
-    torch.multiprocessing.spawn(run_DDP, args=(args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, args.epochs, results_path, 'model', args.classifier), nprocs=args.gpus)
-    
+    with open("train_pickle", "rb") as f:
+         train_list = pickle.load(f)
+    print("loaded train")
+    with open("test_pickle", "rb") as f1:
+         test_list = pickle.load(f1)
+    print("loaded test")
 
+    with open("valid_pickle", "rb") as f2:
+         valid_list = pickle.load(f2)
+    print("loaded valid")
+    ######################################
+
+    world_size = args.gpus * args.nodes
+    torch.multiprocessing.spawn(run_DDP, args=(train_list,test_list,valid_list,args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, 100, results_path, 'model', args.classifier), nprocs=args.gpus)
+    
 
 
