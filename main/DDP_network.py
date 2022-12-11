@@ -305,6 +305,10 @@ if __name__ == '__main__':
 
     if args.classifier == 'vgg':
         classifier = VGG(n_classes=args.n_classes).to(device=device)
+    elif args.classifier == 'cnn':
+        classifier = CNNModel(n_classes=args.n_classes).to(device=device)
+    elif args.classifier == 'joint':
+        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg').to(device=device)
     else:
         raise ValueError('Unknown classifier')
 
