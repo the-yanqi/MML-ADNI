@@ -117,6 +117,9 @@ class BidsMriBrainDataset(Dataset):
         else:
             raise ValueError('Please enter a path or a Dataframe as first argument')
 
+        remove_list = ['participant_id','session_id','alternative_id_1','diagnosis_sc','diagnosis_12month', 'data_dir','img_dir']
+        self.tab_columns = [i for i in self.subjects_df.columns if i not in remove_list]
+
         self.transform = transform
 
         if classes == 2:
@@ -139,7 +142,9 @@ class BidsMriBrainDataset(Dataset):
         if type(diagnosis_after) is str:
             diagnosis = self.diagnosis_code[diagnosis_after]
         #image=image.unsqueeze(0)
-        sample = {'image': image, 'diagnosis_after_12_months':diagnosis, 'name': subj_name}
+
+        tab_data = np.array(self.subjects_df.loc[subj_idx, self.tab_columns])
+        sample = {'image': image, 'diagnosis_after_12_months':diagnosis, 'name': subj_name, 'tab_data': tab_data}
         if self.transform:
             sample = self.transform(sample)
         return sample

@@ -7,167 +7,13 @@ import pandas as pd
 import torch.nn.init as init
 import torch.optim as optim
 
-
+from model import *
 
 def weights_init(m):
     """Initialize the weights of convolutional and fully connected layers"""
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
         init.xavier_normal_(m.weight.data)
         init.xavier_normal_(m.weight.data)
-
-class LocalBriefNet(nn.Module):
-
-    def __init__(self, n_classes=2):
-        super(LocalBriefNet, self).__init__()
-        self.pool = nn.MaxPool3d(2, 2)
-        self.conv5x5 = nn.Conv3d(1, 32, 5)
-        self.conv3x3 = nn.Conv3d(32, 32, 3)
-        self.last_conv = nn.Conv3d(32, 2, 3)
-        self.fc = nn.Linear(2 * 24 * 30 * 24, n_classes)
-
-    def forward(self, x, train=False):
-        x = F.relu(self.conv5x5(x))
-        x = self.pool(x)
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-
-        x = F.relu(self.last_conv(x))
-        x = x.view(-1, 2 * 24 * 30 * 24)
-        x = self.fc(x)
-        return x
-
-
-class LocalBriefNet2(nn.Module):
-
-    def __init__(self, n_classes=2):
-        super(LocalBriefNet2, self).__init__()
-        self.pool = nn.MaxPool3d(2, 2)
-        self.conv5x5 = nn.Conv3d(1, 32, 5)
-        self.conv3x3 = nn.Conv3d(32, 32, 3)
-        self.last_conv = nn.Conv3d(32, 2, 3)
-        self.fc = nn.Linear(2 * 23 * 29 * 23, n_classes)
-
-    def forward(self, x, train=False):
-        x = F.relu(self.conv5x5(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-
-        x = F.relu(self.last_conv(x))
-        x = x.view(-1, 2 * 23 * 29 * 23)
-        x = self.fc(x)
-        return x
-
-
-class LocalBriefNet3(nn.Module):
-
-    def __init__(self, n_classes=2):
-        super(LocalBriefNet3, self).__init__()
-        self.pool = nn.MaxPool3d(2, 2)
-        self.conv5x5 = nn.Conv3d(1, 32, 5)
-        self.conv3x3 = nn.Conv3d(32, 32, 3)
-        self.last_conv = nn.Conv3d(32, 2, 3)
-        self.fc = nn.Linear(2 * 24 * 30 * 24, n_classes)
-
-    def forward(self, x, train=False):
-        x = F.relu(self.conv5x5(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-
-        x = F.relu(self.last_conv(x))
-        x = x.view(-1, 2 * 24 * 30 * 24)
-        x = self.fc(x)
-        return x
-
-
-class VGG(nn.Module):
-    def __init__(self, n_classes=2):
-        super(VGG, self).__init__()
-        self.pool = nn.MaxPool3d(2, 2)
-        self.conv1 = nn.Conv3d(1, 32*2, 3, padding=1)
-        self.conv2 = nn.Conv3d(32*2, 64*2, 3, padding=1)
-        self.conv3 = nn.Conv3d(64*2, 128*2, 3, padding=1)
-        self.conv4 = nn.Conv3d(128*2, 128*2, 3, padding=1)
-        self.conv5 = nn.Conv3d(128*2, 256*2, 3, padding=1)
-        self.conv6 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv8 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv9 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv7 = nn.Conv3d(256*2, 32, 1)
-        self.fc1 = nn.Linear(32 * 3 * 4 * 3, 100)
-        self.fc2 = nn.Linear(100, n_classes)
-
-    def forward(self, x, train=False):
-        x = F.relu(self.conv1(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv2(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv5(x))
-        x = F.relu(self.conv6(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv8(x))
-        x = F.relu(self.conv9(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv7(x))
-        x = x.view(-1, 32 * 3 * 4 * 3)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-class CNNModel(nn.Module):
-    def __init__(self,n_classes):
-        super(CNNModel, self).__init__()
-        
-        self.conv_layer1 = self._conv_layer_set(1, 32)
-        self.conv_layer2 = self._conv_layer_set(32, 64)
-        self.conv_layer3 = self._conv_layer_set(64, 128)
-        self.conv_layer4 = self._conv_layer_set(128, 128)
-        self.fc1 = nn.Linear(7*9*7*128, 128)
-        self.fc2 = nn.Linear(128, n_classes)
-        self.relu = nn.LeakyReLU()
-        self.batch=nn.BatchNorm1d(128)
-        self.drop=nn.Dropout(p=0.15)       
-        self.flatten = nn.Flatten() 
-        
-    def _conv_layer_set(self, in_c, out_c):
-        conv_layer = nn.Sequential(
-        nn.Conv3d(in_c, out_c, kernel_size=(3, 3, 3), padding=1),
-        nn.LeakyReLU(),
-        nn.MaxPool3d((2, 2, 2)),
-        )
-        return conv_layer
-    
-
-    def forward(self, x):
-        # Set 1
-        out = self.conv_layer1(x)
-        out = self.conv_layer2(out)
-        out = self.conv_layer3(out)
-        out = self.conv_layer4(out)
-        out = self.flatten(out)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.batch(out)
-        out = self.drop(out)
-        out = self.fc2(out)
-        
-        return out
-
 
 
 def train(model, trainloader, validloader, epochs=1000, save_interval=5, results_path=None, model_name='model', tol=0.0,
@@ -254,6 +100,7 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
             'acc_valid_max': acc_valid_max}
 
 
+
 if __name__ == '__main__':
     from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
     from training_functions import run
@@ -284,7 +131,7 @@ if __name__ == '__main__':
                         help='Action to rescale the BIDS without deforming the images')
 
     # Training arguments
-    parser.add_argument("-e", "--epochs", type=int, default=10,
+    parser.add_argument("-e", "--epochs", type=int, default=60,
                         help="number of loops on the whole dataset")
     parser.add_argument('-lr', '--learning_rate', type=float, default=1.0,
                         help='the learning rate of the optimizer (*0.00005)')
@@ -294,6 +141,10 @@ if __name__ == '__main__':
                         help='Dropout rate before FC layers')
     parser.add_argument('--batch_size', '-batch', type=int, default=4,
                         help="The size of the batches to train the network")
+    parser.add_argument("--model_path", type=str, default='basic',
+                        help='checkpoint path')
+    parser.add_argument("--phase", type=str, default='training',
+                        help='experiment phase, ')
 
     # Managing output
     parser.add_argument("-n", "--name", type=str, default='network',
@@ -361,5 +212,5 @@ if __name__ == '__main__':
     optimizer = optim.Adam(filter(lambda param: param.requires_grad, classifier.parameters()), lr=lr,weight_decay=1e-4)
 
     # Training
-    best_params = run(classifier, trainset, validset, testset, optimizer, device=device, batch_size=args.batch_size, folds=args.cross_validation, epochs=args.epochs, results_path=results_path, model_name=args.name,
+    best_params = run(classifier, trainset, validset, testset, optimizer, device=device, batch_size=args.batch_size, epochs=args.epochs, phase=args.phase, results_path=results_path, model_name=args.name,
                                    save_interval=args.save_interval)

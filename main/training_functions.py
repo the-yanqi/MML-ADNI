@@ -167,7 +167,7 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
     # The program stops when the network learnt the training data
     epoch = 0
     acc_valid = 0
-    while epoch < epochs: #and acc_train < 100 - tol:
+    while epoch < epochs:# and acc_train < 100 - tol:
         loss_train = []
         predicted_list = []
         truth_list = []
@@ -288,7 +288,7 @@ def compute_balanced_accuracy(predicted_list, truth_list):
 
     return acc 
 
-def run(model, trainset,validset,testset, optimizer, device, folds=10, batch_size=4, **train_args):
+def run(model, trainset, validset, testset, optimizer, device, batch_size=4, phase = 'training', **train_args):
     from torch.utils.data import DataLoader
 
 
@@ -304,8 +304,19 @@ def run(model, trainset,validset,testset, optimizer, device, folds=10, batch_siz
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)
     
     print('Loading complete.')
+    
+    if phase == 'training':
+        parameters_found = train(model, trainloader, validloader, optimizer, device, **train_args)
 
-    parameters_found = train(model, trainloader, validloader, optimizer, device, **train_args)
+    elif phase == 'inference':
+        weights = torch.load(train_args['model_path'])
+        model.load_state_dict(weights)
+        acc_test, all_prediction_scores = test(model, testloader, device=device)
+
+        np.save(os.path.join(results_path,"predictions_best_test"), all_prediction_scores)
+        print('Accuracy on test set: %.2f %% \n' % acc_test)
+        
+
     #acc_test = test(parameters_found['best_model'], testloader, train_args['gpu'], verbose=False)
     #acc_valid = test(parameters_found['best_model'], validloader, train_args['gpu'], verbose=False)
     #acc_train = test(parameters_found['best_model'], trainloader, device=device, verbose=False)
