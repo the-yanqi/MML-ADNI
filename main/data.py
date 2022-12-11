@@ -143,7 +143,7 @@ class BidsMriBrainDataset(Dataset):
             diagnosis = self.diagnosis_code[diagnosis_after]
         #image=image.unsqueeze(0)
 
-        tab_data = np.array(self.subjects_df.loc[subj_idx, self.tab_columns])
+        tab_data = np.array(self.subjects_df.loc[subj_idx, self.tab_columns]).astype(np.float32)
         sample = {'image': image, 'diagnosis_after_12_months':diagnosis, 'name': subj_name, 'tab_data': tab_data}
         if self.transform:
             sample = self.transform(sample)
@@ -187,13 +187,15 @@ class ToTensor(object):
             #image = image.unsqueeze(0)
             return {'image': image,
                     'diagnosis_after_12_months': torch.from_numpy(np.array(diagnosis)),
-                    'name': name}
+                    'name': name,
+                    'tab_data': torch.from_numpy(sample['tab_data']).float()}
         else:
             image= torch.from_numpy(image[np.newaxis, :]).float()
             #image = image.unsqueeze(0)
             return {'image': image,
                     'diagnosis_after_12_months': diagnosis,
-                    'name': name}
+                    'name': name,
+                    'tab_data': torch.from_numpy(sample['tab_data']).float()}
 
 
 class MeanNormalization(object):

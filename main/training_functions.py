@@ -132,7 +132,7 @@ def adjust_learning_rate(optimizer, value):
         param_group['lr'] = lr
 
 
-def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=None, model_name='model', tol=0.0):
+def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=None, model_name='model', tol=0.0, classifier='vgg'):
     """
     Training a model using a validation set to find the best parameters
 
@@ -173,10 +173,13 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
         truth_list = []
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
-
             inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)      
             optimizer.zero_grad()
-            outputs = model(inputs)
+            if 'joint' in classifier:
+                tab_inputs = data['tab_data'].to(device)
+                outputs = model(inputs, tab_inputs)
+            else:
+                outputs = model(inputs)
             loss = criterion(outputs, labels)
             
             loss.backward()
@@ -232,7 +235,7 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
            }
 
 
-def test(model, dataloader, device, verbose=True):
+def test(model, dataloader, device, verbose=True, classifier='vgg'):
     """
     Computes the balanced accuracy of the model
 
@@ -250,7 +253,11 @@ def test(model, dataloader, device, verbose=True):
     with torch.no_grad():
         for step, sample in enumerate(dataloader):
             images, diagnoses = sample['image'].to(device), sample['diagnosis_after_12_months'].to(device)
-            outputs = model(images)
+            if 'joint' == classifier:
+                tab_inputs = sample['tab_data'].to(device)
+                outputs = model(inputs, tab_inputs)
+            else:
+                outputs = model(images)
             # save for compute train acc
             pred_scores = F.softmax(outputs,1)
 
@@ -311,7 +318,7 @@ def run(model, trainset, validset, testset, optimizer, device, batch_size=4, pha
     elif phase == 'inference':
         weights = torch.load(train_args['model_path'])
         model.load_state_dict(weights)
-        acc_test, all_prediction_scores = test(model, testloader, device=device)
+        acc_test, all_prediction_scores = test(model, testloader, device=device, classifier = train_args['classifier'])
 
         np.save(os.path.join(results_path,"predictions_best_test"), all_prediction_scores)
         print('Accuracy on test set: %.2f %% \n' % acc_test)

@@ -204,6 +204,8 @@ if __name__ == '__main__':
         classifier = VGG(n_classes=args.n_classes).to(device=device)
     elif args.classifier == 'cnn':
         classifier = CNNModel(n_classes=args.n_classes).to(device=device)
+    elif args.classifier == 'joint':
+        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg').to(device=device)
     else:
         raise ValueError('Unknown classifier')
 
@@ -213,4 +215,4 @@ if __name__ == '__main__':
 
     # Training
     best_params = run(classifier, trainset, validset, testset, optimizer, device=device, batch_size=args.batch_size, epochs=args.epochs, phase=args.phase, results_path=results_path, model_name=args.name,
-                                   save_interval=args.save_interval)
+                                   save_interval=args.save_interval, classifier = args.classifier)

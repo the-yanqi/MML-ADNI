@@ -10,61 +10,13 @@ from time import time
 from copy import copy, deepcopy
 import numpy as np
 
-
+from model import *
 
 def weights_init(m):
     """Initialize the weights of convolutional and fully connected layers"""
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
         init.xavier_normal_(m.weight.data)
         init.xavier_normal_(m.weight.data)
-
-
-
-
-class VGG(nn.Module):
-    def __init__(self, n_classes=2):
-        super(VGG, self).__init__()
-        self.pool = nn.MaxPool3d(2, 2)
-        self.conv1 = nn.Conv3d(1, 32*2, 3, padding=1)
-        self.conv2 = nn.Conv3d(32*2, 64*2, 3, padding=1)
-        self.conv3 = nn.Conv3d(64*2, 128*2, 3, padding=1)
-        self.conv4 = nn.Conv3d(128*2, 128*2, 3, padding=1)
-        self.conv5 = nn.Conv3d(128*2, 256*2, 3, padding=1)
-        self.conv6 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv8 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv9 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv7 = nn.Conv3d(256*2, 32, 1)
-        self.fc1 = nn.Linear(32 * 3 * 4 * 3, 100)
-        self.fc2 = nn.Linear(100, n_classes)
-
-    def forward(self, x, train=False):
-        x = F.relu(self.conv1(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv2(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv5(x))
-        x = F.relu(self.conv6(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv8(x))
-        x = F.relu(self.conv9(x))
-        x = self.pool(x)
-
-        x = F.relu(self.conv7(x))
-        x = x.view(-1, 32 * 3 * 4 * 3)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-
-
-
 
 
 def test(model, dataloader, device, verbose=True):

@@ -27,77 +27,28 @@ class LocalBriefNet(nn.Module):
         return x
 
 
-class LocalBriefNet2(nn.Module):
-
-    def __init__(self, n_classes=2):
-        super(LocalBriefNet2, self).__init__()
-        self.pool = nn.MaxPool3d(2, 2)
-        self.conv5x5 = nn.Conv3d(1, 32, 5)
-        self.conv3x3 = nn.Conv3d(32, 32, 3)
-        self.last_conv = nn.Conv3d(32, 2, 3)
-        self.fc = nn.Linear(2 * 23 * 29 * 23, n_classes)
-
-    def forward(self, x, train=False):
-        x = F.relu(self.conv5x5(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-
-        x = F.relu(self.last_conv(x))
-        x = x.view(-1, 2 * 23 * 29 * 23)
-        x = self.fc(x)
-        return x
-
-
-class LocalBriefNet3(nn.Module):
-
-    def __init__(self, n_classes=2):
-        super(LocalBriefNet3, self).__init__()
-        self.pool = nn.MaxPool3d(2, 2)
-        self.conv5x5 = nn.Conv3d(1, 32, 5)
-        self.conv3x3 = nn.Conv3d(32, 32, 3)
-        self.last_conv = nn.Conv3d(32, 2, 3)
-        self.fc = nn.Linear(2 * 24 * 30 * 24, n_classes)
-
-    def forward(self, x, train=False):
-        x = F.relu(self.conv5x5(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-        x = F.relu(self.conv3x3(x))
-        x = F.relu(self.conv3x3(x))
-        x = self.pool(x)
-
-        x = F.relu(self.last_conv(x))
-        x = x.view(-1, 2 * 24 * 30 * 24)
-        x = self.fc(x)
-        return x
-
 class joint_model(nn.Module):      
-    def __init__(self, in_shape, enc_shape = 8, n_classes = 3, classifier='vgg'):
+    def __init__(self, tab_in_shape, enc_shape = 8, n_classes = 3, classifier='vgg'):
         super(joint_model, self).__init__()
 
-        self.autoencoder = Autoencoder(in_shape = in_shape, out_cls = n_classes, enc_shape = 8)
+        self.autoencoder = Autoencoder(in_shape = tab_in_shape, out_cls = n_classes, enc_shape = 8)
         if classifier == 'vgg':
             self.classifier = VGG(n_classes= n_classes)
 
-        self.layer1 = nn.Sequential([
+        self.layer1 = nn.Sequential(
             nn.Linear(64 + 32 * 3 * 4 * 3, 256),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
-            nn.Dropout(0.2)
-        ])
-        self.layer2 = nn.Sequential([
+            nn.BatchNorm1d(256),
+            nn.Dropout(0.2))
+
+        self.layer2 = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.BatchNorm1d(128),
-            nn.Dropout(0.2)
-        ])
+            nn.Dropout(0.2))
         self.linear = nn.Linear(128, n_classes)
 
-    def forward(self, tab, img):
+    def forward(self, img, tab):
 
         feat_emb1 = self.autoencoder.feature_extractor(tab)
         feat_emb2 = self.classifier.feature_extractor(img)
