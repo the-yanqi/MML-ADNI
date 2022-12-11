@@ -322,8 +322,9 @@ if __name__ == '__main__':
         classifier = VGG(n_classes=args.n_classes)
     elif args.classifier == 'cnn':
         classifier = CNNModel(n_classes=args.n_classes)
-    elif args.classifier == 'joint':
-        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg')
+    elif 'joint' in args.classifier:
+        img_classifier = args.classifier.split('_')[1]
+        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier=img_classifier)
     else:
         raise ValueError('Unknown classifier')
 

@@ -34,6 +34,8 @@ class joint_model(nn.Module):
         self.autoencoder = self._autoencoder(in_shape = tab_in_shape, enc_shape = 8) #, out_cls = n_classes
         if classifier == 'vgg':
             self.classifier = self._vgg_classifier()
+        elif classifier == 'cnn':
+            self.classifier = self._cnn_classifier()
 
         self.layer1 = nn.Sequential(
             nn.Linear(64 + 32 * 3 * 4 * 3, 256),
@@ -67,6 +69,32 @@ class joint_model(nn.Module):
             nn.Linear(64, 64)
         )
         return enc_dec
+
+    def _cnn_classifier(self):
+        classifier = nn.Sequential(
+        nn.Conv3d(1, 32, kernel_size=(3, 3, 3), padding=1),
+        nn.LeakyReLU(),
+        nn.MaxPool3d((2, 2, 2)),
+
+        nn.Conv3d(32, 64, kernel_size=(3, 3, 3), padding=1),
+        nn.LeakyReLU(),
+        nn.MaxPool3d((2, 2, 2)),
+
+        nn.Conv3d(64, 128, kernel_size=(3, 3, 3), padding=1),
+        nn.LeakyReLU(),
+        nn.MaxPool3d((2, 2, 2)),
+
+        nn.Conv3d(128, 128, kernel_size=(3, 3, 3), padding=1),
+        nn.LeakyReLU(),
+        nn.MaxPool3d((2, 2, 2)),
+
+        nn.Conv3d(128, 32, kernel_size=(3, 3, 3), padding=1),
+        nn.LeakyReLU(),
+        nn.MaxPool3d((2, 2, 2)),
+
+        nn.Flatten()
+        )
+        return classifier
 
     def _vgg_classifier(self):
         classifier = nn.Sequential(
@@ -171,8 +199,8 @@ class VGG(nn.Module):
         self.conv8 = nn.Conv3d(256, 256, 3, padding=1)
         self.conv9 = nn.Conv3d(256, 256, 3, padding=1)
         self.conv7 = nn.Conv3d(256, 32, 1)
-        self.fc1 = nn.Linear(32 * 3 * 4 * 3, 100)
-        self.fc2 = nn.Linear(100, n_classes)
+        self.fc1 = nn.Linear(32 * 3 * 4 * 3, 128)
+        self.fc2 = nn.Linear(128, n_classes)
 
     def feature_extractor(self, x):
         x = F.relu(self.conv1(x))
@@ -212,7 +240,8 @@ class CNNModel(nn.Module):
         self.conv_layer2 = self._conv_layer_set(32, 64)
         self.conv_layer3 = self._conv_layer_set(64, 128)
         self.conv_layer4 = self._conv_layer_set(128, 128)
-        self.fc1 = nn.Linear(7*9*7*128, 128)
+        self.conv_layer5 = self._conv_layer_set(128, 32)
+        self.fc1 = nn.Linear(32 * 3 * 4 * 3, 128)
         self.fc2 = nn.Linear(128, n_classes)
         self.relu = nn.LeakyReLU()
         self.batch=nn.BatchNorm1d(128)
@@ -234,6 +263,7 @@ class CNNModel(nn.Module):
         out = self.conv_layer2(out)
         out = self.conv_layer3(out)
         out = self.conv_layer4(out)
+        out = self.conv_layer5(out)
         out = self.flatten(out)
         return out
 
