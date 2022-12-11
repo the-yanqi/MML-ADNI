@@ -20,7 +20,7 @@ def weights_init(m):
         init.xavier_normal_(m.weight.data)
 
 
-def test(model, dataloader, metric, device, classifier = 'vgg', verbose=True):
+def test(model, dataloader, metric, classifier, device, verbose=True):
     """
     Computes the balanced accuracy of the model
 
@@ -30,30 +30,27 @@ def test(model, dataloader, metric, device, classifier = 'vgg', verbose=True):
     :return: balanced accuracy of the model (float)
     """
     model.eval()
-    predicted_list = []
-    truth_list = []
     all_prediction_scores = []
     
     # The test must not interact with the learning
     with torch.no_grad():
         for step, sample in enumerate(dataloader):
+            if step == 3:
+                break
             images, diagnoses = sample['image'].cuda(non_blocking=True), sample['diagnosis_after_12_months'].cuda(non_blocking=True)
             if 'joint' == classifier:
-                tab_inputs = sample['tab_data'].to(device)
+                tab_inputs = sample['tab_data'].cuda(non_blocking=True)
                 outputs = model(images, tab_inputs)
             else:
                 outputs = model(images)
             # save for compute train acc
             pred_scores = F.softmax(outputs,1)
-            acc_val_batch = metric(preds_score, diagnoses)
+            acc_val_batch = metric(pred_scores, diagnoses)
 
             all_prediction_scores.append(pred_scores)
-            # _, predicted = torch.max(pred_scores, 1)
-            # predicted_list = predicted_list + predicted.tolist()
-            # truth_list = truth_list + diagnoses.tolist()
             print('Step {} / total {} processed'.format(step, len(dataloader)))
 
-    acc = metric.compute()
+    acc = metric.compute().cpu().data.numpy()
     if verbose:
         print('Validation ACC: ' + str(acc))
     metric.reset()
@@ -80,8 +77,6 @@ def compute_balanced_accuracy(predicted_list, truth_list):
     acc = acc * 100 / component
 
     return acc
-
-
 
     
     
@@ -118,7 +113,7 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
     test_path='/scratch/yx2105/shared/MLH/data/test.csv'
     valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
     sigma = 0
-    print(batch_size)
+
     trainset = BidsMriBrainDataset(train_path, transform=composed)
     testset = BidsMriBrainDataset(test_path, transform=composed)
     validset = BidsMriBrainDataset(valid_path, transform=composed)
@@ -185,16 +180,18 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
     epoch = 0
     acc_valid = 0
     while epoch < epochs: #and acc_train < 100 - tol:
-
+        
         loss_train = []
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
+            if i == 10:
+                break
             trainloader.sampler.set_epoch(epoch)
             #inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)
             inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True)
             optimizer.zero_grad()
             if 'joint' in classifier:
-                tab_inputs = data['tab_data'].to(device)
+                tab_inputs = data['tab_data'].cuda(non_blocking=True)
                 outputs = model(inputs, tab_inputs)
             else:
                 outputs = model(inputs)
@@ -206,8 +203,8 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
             loss_train.append(loss.item())
 
             # save for compute train acc
-            preds_score = F.softmax(outputs, 1)
-            acc_train_batch = metric(preds_score, labels)
+            pred_scores = F.softmax(outputs, 1)
+            acc_train_batch = metric(pred_scores, labels)
 
             # print statistics
             running_loss += loss.item()
@@ -217,12 +214,12 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
                 print('ACC train at this batch: {}'.format(acc_train_batch))
                 running_loss = 0.0
         
-        print('Finished Epoch: %d' % (epoch + 1))
+        print('Training finished Epoch: %d' % (epoch + 1))
         save_interval = 1
         # save performance
         if results_path is not None and epoch % save_interval == save_interval - 1:
             # compute train acc
-            acc_train = metric.compute()
+            acc_train = metric.compute().cpu().data.numpy()
             print('Training ACC: {}'.format(acc_train))
             metric.reset()
             training_time = time.time() - t0
@@ -244,6 +241,8 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
                 if rank == 0:
                     torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
                 np.save(os.path.join(results_path,"predictions_best_val"), all_prediction_scores)
+        print('Validation finished Epoch: {}'.format(epoch + 1))
+
         epoch += 1
 
     parameters_found = {'training_time': time() - t0,
@@ -274,7 +273,8 @@ if __name__ == '__main__':
     #####################################################
     parser.add_argument("results_path", type=str,
                         help="where the outputs are stored")
-
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='Number of epochs for training')
     # Network structure
     parser.add_argument("--classifier", type=str, default='basic',
                         help='classifier selected')
@@ -338,7 +338,7 @@ if __name__ == '__main__':
     
     #best_params = run_DDP(classifier, optimizer, device=device, batch_size=args.batch_size, folds=10, epochs=100, results_path=results_path, model_name='model')
     world_size = args.gpus * args.nodes
-    torch.multiprocessing.spawn(run_DDP, args=(args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, 100, results_path, 'model', args.classifier), nprocs=args.gpus)
+    torch.multiprocessing.spawn(run_DDP, args=(args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, args.epochs, results_path, 'model', args.classifier), nprocs=args.gpus)
     
 
 

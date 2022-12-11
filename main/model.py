@@ -31,9 +31,9 @@ class joint_model(nn.Module):
     def __init__(self, tab_in_shape, enc_shape = 8, n_classes = 3, classifier='vgg'):
         super(joint_model, self).__init__()
 
-        self.autoencoder = Autoencoder(in_shape = tab_in_shape, out_cls = n_classes, enc_shape = 8)
+        self.autoencoder = self._autoencoder(in_shape = tab_in_shape, enc_shape = 8) #, out_cls = n_classes
         if classifier == 'vgg':
-            self.classifier = VGG(n_classes= n_classes)
+            self.classifier = self._vgg_classifier()
 
         self.layer1 = nn.Sequential(
             nn.Linear(64 + 32 * 3 * 4 * 3, 256),
@@ -48,11 +48,65 @@ class joint_model(nn.Module):
             nn.Dropout(0.2))
         self.linear = nn.Linear(128, n_classes)
 
+    def _autoencoder(self, in_shape , enc_shape):
+        enc_dec = nn.Sequential(
+            nn.Linear(in_shape, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(32, enc_shape),
+            nn.BatchNorm1d(enc_shape),
+            nn.Linear(enc_shape, 32),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(32, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 64)
+        )
+        return enc_dec
+
+    def _vgg_classifier(self):
+        classifier = nn.Sequential(
+        nn.Conv3d(1, 32, 3, padding=1),
+        nn.ReLU(),
+        nn.MaxPool3d(2, 2),
+
+        nn.Conv3d(32, 64, 3, padding=1),
+        nn.ReLU(),
+        nn.MaxPool3d(2, 2),
+
+        nn.Conv3d(64, 128, 3, padding=1),
+        nn.ReLU(),
+        nn.Conv3d(128, 128, 3, padding=1),
+        nn.ReLU(),
+        nn.MaxPool3d(2, 2),
+
+        nn.Conv3d(128, 256, 3, padding=1),
+        nn.ReLU(),
+        nn.Conv3d(256, 256, 3, padding=1),
+        nn.ReLU(),
+        nn.MaxPool3d(2, 2),
+
+        nn.Conv3d(256, 256, 3, padding=1),
+        nn.ReLU(),
+        nn.Conv3d(256, 256, 3, padding=1),
+        nn.ReLU(),
+        nn.MaxPool3d(2, 2),
+
+        nn.Conv3d(256, 32, 1),
+        nn.ReLU())
+        
+        return classifier
+
     def forward(self, img, tab):
 
-        feat_emb1 = self.autoencoder.feature_extractor(tab)
-        feat_emb2 = self.classifier.feature_extractor(img)
-
+        feat_emb1 = self.classifier(img)
+        feat_emb1 = feat_emb1.view(-1, 32 * 3 * 4 * 3)
+        feat_emb2 = self.autoencoder(tab)
+        
         feat = torch.cat([feat_emb1, feat_emb2], dim = 1)
         x = self.layer1(feat)
         x = self.layer2(x)
@@ -108,15 +162,15 @@ class VGG(nn.Module):
     def __init__(self, n_classes=2):
         super(VGG, self).__init__()
         self.pool = nn.MaxPool3d(2, 2)
-        self.conv1 = nn.Conv3d(1, 32*2, 3, padding=1)
-        self.conv2 = nn.Conv3d(32*2, 64*2, 3, padding=1)
-        self.conv3 = nn.Conv3d(64*2, 128*2, 3, padding=1)
-        self.conv4 = nn.Conv3d(128*2, 128*2, 3, padding=1)
-        self.conv5 = nn.Conv3d(128*2, 256*2, 3, padding=1)
-        self.conv6 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv8 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv9 = nn.Conv3d(256*2, 256*2, 3, padding=1)
-        self.conv7 = nn.Conv3d(256*2, 32, 1)
+        self.conv1 = nn.Conv3d(1, 32, 3, padding=1)
+        self.conv2 = nn.Conv3d(32, 64, 3, padding=1)
+        self.conv3 = nn.Conv3d(64, 128, 3, padding=1)
+        self.conv4 = nn.Conv3d(128, 128, 3, padding=1)
+        self.conv5 = nn.Conv3d(128, 256, 3, padding=1)
+        self.conv6 = nn.Conv3d(256, 256, 3, padding=1)
+        self.conv8 = nn.Conv3d(256, 256, 3, padding=1)
+        self.conv9 = nn.Conv3d(256, 256, 3, padding=1)
+        self.conv7 = nn.Conv3d(256, 32, 1)
         self.fc1 = nn.Linear(32 * 3 * 4 * 3, 100)
         self.fc2 = nn.Linear(100, n_classes)
 
