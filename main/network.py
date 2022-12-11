@@ -7,7 +7,7 @@ import pandas as pd
 import torch.nn.init as init
 import torch.optim as optim
 
-from model import *
+
 
 def weights_init(m):
     """Initialize the weights of convolutional and fully connected layers"""
@@ -102,10 +102,11 @@ def train(model, trainloader, validloader, epochs=1000, save_interval=5, results
 
 
 if __name__ == '__main__':
-    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
+    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, collate_func_img
     from training_functions import run
     import torchvision
     import argparse
+    from model import *
     #print("STARTING......?")
     parser = argparse.ArgumentParser()
 

@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 import torch.nn.init as init
 import os
+from data import collate_func_img
+from sklearn.metrics import roc_auc_score
 
 
 class CrossValidationSplit:
@@ -167,6 +169,7 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
     # The program stops when the network learnt the training data
     epoch = 0
     acc_valid = 0
+    model.train()
     while epoch < epochs:# and acc_train < 100 - tol:
         loss_train = []
         predicted_list = []
@@ -209,7 +212,7 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
             print('Training ACC: {}'.format(acc_train))
 
             training_time = time() - t0
-            acc_valid, all_prediction_scores = test(model, validloader, device=device)
+            acc_valid, all_prediction_scores = test(model, validloader, device=device, classifier=classifier)
 
             row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
                            ]).reshape(1, -1)
@@ -244,7 +247,7 @@ def test(model, dataloader, device, verbose=True, classifier='vgg'):
     :param gpu: if True a gpu is used
     :return: balanced accuracy of the model (float)
     """
-
+    model.eval()
     predicted_list = []
     truth_list = []
     all_prediction_scores = []
@@ -255,7 +258,7 @@ def test(model, dataloader, device, verbose=True, classifier='vgg'):
             images, diagnoses = sample['image'].to(device), sample['diagnosis_after_12_months'].to(device)
             if 'joint' == classifier:
                 tab_inputs = sample['tab_data'].to(device)
-                outputs = model(inputs, tab_inputs)
+                outputs = model(images, tab_inputs)
             else:
                 outputs = model(images)
             # save for compute train acc
@@ -268,8 +271,11 @@ def test(model, dataloader, device, verbose=True, classifier='vgg'):
             print('Step {} / total {} processed'.format(step, len(dataloader)))
 
     acc = compute_balanced_accuracy(predicted_list, truth_list)
+
+    auroc = roc_auc_score(truth_list, predicted_list, multi_class="ovr")
     if verbose:
         print('Validation ACC: ' + str(acc))
+        print('Validation AUC: ' + str(auroc))
 
     all_prediction_scores = torch.cat(all_prediction_scores,0).cpu().data.numpy()
 
@@ -306,9 +312,9 @@ def run(model, trainset, validset, testset, optimizer, device, batch_size=4, pha
     print('Length validation set', len(validset))
     print('Length test set', len(testset))
     #changed num_workers from 4 to batch_size
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4)
-    validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=4)
-    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4)# collate_fn=collate_func_img, pin_memory=True)
+    validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=4)# collate_fn=collate_func_img, pin_memory=True)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)# collate_fn=collate_func_img, pin_memory=True)
     
     print('Loading complete.')
     

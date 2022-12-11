@@ -10,6 +10,7 @@ from time import time
 from copy import copy, deepcopy
 import numpy as np
 
+import torchmetrics
 from model import *
 
 def weights_init(m):
@@ -19,7 +20,7 @@ def weights_init(m):
         init.xavier_normal_(m.weight.data)
 
 
-def test(model, dataloader, device, verbose=True):
+def test(model, dataloader, metric, device, classifier = 'vgg', verbose=True):
     """
     Computes the balanced accuracy of the model
 
@@ -28,7 +29,7 @@ def test(model, dataloader, device, verbose=True):
     :param gpu: if True a gpu is used
     :return: balanced accuracy of the model (float)
     """
-
+    model.eval()
     predicted_list = []
     truth_list = []
     all_prediction_scores = []
@@ -37,22 +38,27 @@ def test(model, dataloader, device, verbose=True):
     with torch.no_grad():
         for step, sample in enumerate(dataloader):
             images, diagnoses = sample['image'].cuda(non_blocking=True), sample['diagnosis_after_12_months'].cuda(non_blocking=True)
-            outputs = model(images)
+            if 'joint' == classifier:
+                tab_inputs = sample['tab_data'].to(device)
+                outputs = model(images, tab_inputs)
+            else:
+                outputs = model(images)
             # save for compute train acc
             pred_scores = F.softmax(outputs,1)
+            acc_val_batch = metric(preds_score, diagnoses)
 
             all_prediction_scores.append(pred_scores)
-            _, predicted = torch.max(pred_scores, 1)
-            predicted_list = predicted_list + predicted.tolist()
-            truth_list = truth_list + diagnoses.tolist()
+            # _, predicted = torch.max(pred_scores, 1)
+            # predicted_list = predicted_list + predicted.tolist()
+            # truth_list = truth_list + diagnoses.tolist()
             print('Step {} / total {} processed'.format(step, len(dataloader)))
 
-    acc = compute_balanced_accuracy(predicted_list, truth_list)
+    acc = metric.compute()
     if verbose:
         print('Validation ACC: ' + str(acc))
+    metric.reset()
 
     all_prediction_scores = torch.cat(all_prediction_scores,0).cpu().data.numpy()
-
     return acc, all_prediction_scores
 
 def compute_balanced_accuracy(predicted_list, truth_list):
@@ -81,7 +87,7 @@ def compute_balanced_accuracy(predicted_list, truth_list):
     
 ####################################################################################
 
-def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_size=4,  epochs=100, results_path='scratch/di2078/results', model_name='model'):
+def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  epochs=100, results_path='scratch/di2078/results', model_name='model', classifier='vgg'):
     from torch.utils.data import DataLoader
     from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
     from training_functions import run
@@ -112,20 +118,19 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
     test_path='/scratch/yx2105/shared/MLH/data/test.csv'
     valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
     sigma = 0
-
+    print(batch_size)
     trainset = BidsMriBrainDataset(train_path, transform=composed)
     testset = BidsMriBrainDataset(test_path, transform=composed)
     validset = BidsMriBrainDataset(valid_path, transform=composed)
-    batch_size=4
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         trainset,num_replicas=world_size,rank=rank)
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=train_sampler)
     test_sampler = torch.utils.data.distributed.DistributedSampler(
         testset,num_replicas=world_size,rank=rank)
-    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=train_sampler)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=test_sampler)
     valid_sampler = torch.utils.data.distributed.DistributedSampler(
         validset,num_replicas=world_size,rank=rank)
-    validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=train_sampler)
+    validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=valid_sampler)
     ############################################################
     #results_path = train_args['results_path']
     t0 = time.time()
@@ -154,14 +159,24 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
         epoch of best accuracy for the validation set (int)
         parameters of the model corresponding to the epoch of best accuracy
     """
+
+    # prepare metrics
+    metric = torchmetrics.Accuracy(task="multiclass", num_classes=3, average='macro')
+    model.metric = metric
+    model.to(gpu)
     model = nn.parallel.DistributedDataParallel(model,device_ids=[gpu])
-    filename = path.join(results_path, 'performance.csv')
-    criterion = nn.CrossEntropyLoss().cuda(gpu)
+
+    # define loss function
+    class_weights = torch.tensor([0.15,0.8,0.05],dtype=torch.float).cuda(gpu) #CN,AD,MCI
+    criterion = nn.CrossEntropyLoss(weight=class_weights).cuda(gpu)
+
+    # prepare result file
     results_df = pd.DataFrame(columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
+    filename = path.join(results_path, 'performance.csv')
     with open(filename, 'w') as f:
         results_df.to_csv(f, index=False, sep='\t')
-    #changed acc_valid to acc_train
 
+    model.train()
     acc_valid_max = 0
     best_epoch = 0
     best_model = copy(model)
@@ -170,18 +185,19 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
     epoch = 0
     acc_valid = 0
     while epoch < epochs: #and acc_train < 100 - tol:
+
         loss_train = []
-        predicted_list = []
-        truth_list = []
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
-
-
-            
+            trainloader.sampler.set_epoch(epoch)
             #inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)
             inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True)
             optimizer.zero_grad()
-            outputs = model(inputs)
+            if 'joint' in classifier:
+                tab_inputs = data['tab_data'].to(device)
+                outputs = model(inputs, tab_inputs)
+            else:
+                outputs = model(inputs)
             loss = criterion(outputs, labels)
             
             loss.backward()
@@ -191,42 +207,42 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, folds=10, batch_s
 
             # save for compute train acc
             preds_score = F.softmax(outputs, 1)
-            _, predicted = torch.max(preds_score, 1)
-            predicted_list = predicted_list + predicted.tolist()
-            truth_list = truth_list + labels.tolist()
+            acc_train_batch = metric(preds_score, labels)
 
             # print statistics
             running_loss += loss.item()
             if i % 5 == 4:  # print every 10 mini-batches
                 print('Training epoch %d : step %d / %d loss: %f' %
                       (epoch + 1,  i + 1, len(trainloader),running_loss))
+                print('ACC train at this batch: {}'.format(acc_train_batch))
                 running_loss = 0.0
         
         print('Finished Epoch: %d' % (epoch + 1))
-        save_interval = 5
+        save_interval = 1
         # save performance
         if results_path is not None and epoch % save_interval == save_interval - 1:
             # compute train acc
-            acc_train = compute_balanced_accuracy(predicted_list, truth_list)
+            acc_train = metric.compute()
             print('Training ACC: {}'.format(acc_train))
+            metric.reset()
+            training_time = time.time() - t0
 
-            training_time = time() - t0
-            acc_valid, all_prediction_scores = test(model, validloader, device=device)
+            # evaluate and compute val metric
+            acc_valid, all_prediction_scores = test(model, validloader, metric, classifier, device=device)
 
             row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
                            ]).reshape(1, -1)
-
-            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
-                                               
+            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])                                  
             with open(filename, 'a') as f:
                 row_df.to_csv(f, header=False, index=False, sep='\t')
 
+            # save model
             if acc_valid > acc_valid_max:
                 acc_valid_max = copy(acc_valid)
                 best_epoch = copy(epoch)
                 best_model = deepcopy(model)
-
-                torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
+                if rank == 0:
+                    torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
                 np.save(os.path.join(results_path,"predictions_best_val"), all_prediction_scores)
         epoch += 1
 
@@ -303,11 +319,11 @@ if __name__ == '__main__':
 
 
     if args.classifier == 'vgg':
-        classifier = VGG(n_classes=args.n_classes).to(device=device)
+        classifier = VGG(n_classes=args.n_classes)
     elif args.classifier == 'cnn':
-        classifier = CNNModel(n_classes=args.n_classes).to(device=device)
+        classifier = CNNModel(n_classes=args.n_classes)
     elif args.classifier == 'joint':
-        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg').to(device=device)
+        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg')
     else:
         raise ValueError('Unknown classifier')
 
@@ -322,7 +338,7 @@ if __name__ == '__main__':
     
     #best_params = run_DDP(classifier, optimizer, device=device, batch_size=args.batch_size, folds=10, epochs=100, results_path=results_path, model_name='model')
     world_size = args.gpus * args.nodes
-    torch.multiprocessing.spawn( run_DDP, args=(args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, 10, 100, results_path, 'model'), nprocs=args.gpus)
+    torch.multiprocessing.spawn(run_DDP, args=(args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, 100, results_path, 'model', args.classifier), nprocs=args.gpus)
     
 
 

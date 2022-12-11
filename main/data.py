@@ -9,12 +9,30 @@ import numpy as np
 from nilearn import plotting
 from skimage.transform import resize
 from scipy.ndimage.filters import gaussian_filter
-
+import torchvision.transforms as transforms
 
 
 minimum_size = np.array([145, 230, 200])
 maximum_size = np.array([235, 280, 280])
 
+def collate_func_img(batch):
+    """
+    Collate functions used to collapse a mini-batch for single modal dataset.
+    :param batch:
+    :return:
+    """
+    img_list = []
+    label_list = []
+    name_list = []
+    tab_data_list = []
+   
+    for dict_item in batch:
+        img_list.append(dict_item['image'].float().unsqueeze(0))
+        label_list.append(dict_item['diagnosis_after_12_months'])
+        name_list.append(dict_item['name'])
+        tab_data_list.append(dict_item['tab_data'].unsqueeze(0))
+    
+    return {'image': torch.cat(img_list,dim=0), 'diagnosis_after_12_months': torch.cat(label_list,dim=0), 'name': name_list, 'tab_data': torch.cat(tab_data_list,dim=0)}
 
 def crop(image):
     size = np.array(np.shape(image))
@@ -196,6 +214,16 @@ class ToTensor(object):
                     'diagnosis_after_12_months': diagnosis,
                     'name': name,
                     'tab_data': torch.from_numpy(sample['tab_data']).float()}
+
+# class ToTensor(object):
+#     """Convert image type to Tensor and diagnosis to diagnosis code"""
+
+#     def __init__(self, gpu=False):
+#         self.operator = transforms.ToTensor()
+
+#     def __call__(self, sample):
+#         sample['image'] = self.operator(sample['image']).unsqueeze(0)
+#         return sample
 
 
 class MeanNormalization(object):
