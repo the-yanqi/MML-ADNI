@@ -35,8 +35,8 @@ def test(model, dataloader, metric, classifier, device, verbose=True):
     # The test must not interact with the learning
     with torch.no_grad():
         for step, sample in enumerate(dataloader):
-            if step == 3:
-                break
+            # if step == 3:
+            #     break
             images, diagnoses = sample['image'].cuda(non_blocking=True), sample['diagnosis_after_12_months'].cuda(non_blocking=True)
             if 'joint' == classifier:
                 tab_inputs = sample['tab_data'].cuda(non_blocking=True)
@@ -184,8 +184,6 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
         loss_train = []
         running_loss = 0
         for i, data in enumerate(trainloader, 0):
-            if i == 10:
-                break
             trainloader.sampler.set_epoch(epoch)
             #inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)
             inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True)
@@ -226,12 +224,12 @@ def run_DDP(gpu,nr,gpus, world_size, model, optimizer, device, batch_size=4,  ep
 
             # evaluate and compute val metric
             acc_valid, all_prediction_scores = test(model, validloader, metric, classifier, device=device)
-
-            row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
-                           ]).reshape(1, -1)
-            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])                                  
-            with open(filename, 'a') as f:
-                row_df.to_csv(f, header=False, index=False, sep='\t')
+            if rank == 0:
+                row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
+                            ]).reshape(1, -1)
+                row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])                                  
+                with open(filename, 'a') as f:
+                    row_df.to_csv(f, header=False, index=False, sep='\t')
 
             # save model
             if acc_valid > acc_valid_max:
