@@ -37,7 +37,7 @@ def test(model, dataloader, metric, classifier, device, verbose=True):
             # if step == 3:
             #     break
             images, diagnoses = sample['image'].cuda(non_blocking=True), sample['diagnosis_after_12_months'].cuda(non_blocking=True)
-            if 'joint' == classifier:
+            if 'joint' in classifier:
                 tab_inputs = sample['tab_data'].cuda(non_blocking=True)
                 outputs = model(images, tab_inputs)
             else:
@@ -318,8 +318,9 @@ if __name__ == '__main__':
         classifier = VGG(n_classes=args.n_classes)
     elif args.classifier == 'cnn':
         classifier = CNNModel(n_classes=args.n_classes)
-    elif args.classifier == 'joint':
-        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg')
+    elif 'joint' in args.classifier:
+        img_classifier = args.classifier.split('_')[-1]
+        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier=img_classifier)
     else:
         raise ValueError('Unknown classifier')
 
@@ -330,14 +331,14 @@ if __name__ == '__main__':
     # Training
     import pickle
     
-    with open("train_pickle", "rb") as f:
+    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/train_pickle", "rb") as f:
          train_list = pickle.load(f)
     print("loaded train")
-    with open("test_pickle", "rb") as f1:
+    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/test_pickle", "rb") as f1:
          test_list = pickle.load(f1)
     print("loaded test")
 
-    with open("valid_pickle", "rb") as f2:
+    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/valid_pickle", "rb") as f2:
          valid_list = pickle.load(f2)
     print("loaded valid")
     ######################################
