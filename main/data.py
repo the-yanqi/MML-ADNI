@@ -9,12 +9,27 @@ import numpy as np
 from nilearn import plotting
 from skimage.transform import resize
 from scipy.ndimage.filters import gaussian_filter
-import torchvision.transforms as transforms
+
 
 
 minimum_size = np.array([145, 230, 200])
 maximum_size = np.array([235, 280, 280])
 
+
+def crop(image):
+    size = np.array(np.shape(image))
+    crop_idx = np.rint((size - minimum_size) / 2).astype(int)
+    first_crop = copy(crop_idx)
+    second_crop = copy(crop_idx)
+    for i in range(3):
+        if minimum_size[i] + first_crop[i] * 2 != size[i]:
+            first_crop[i] -= 1
+
+    cropped_image = image[first_crop[0]:size[0]-second_crop[0],
+                          first_crop[1]:size[1]-second_crop[1],
+                          first_crop[2]:size[2]-second_crop[2]]
+
+    return cropped_image
 def collate_func_img(batch):
     """
     Collate functions used to collapse a mini-batch for single modal dataset.
@@ -31,24 +46,6 @@ def collate_func_img(batch):
         label_list.append(dict_item['diagnosis_after_12_months'])
         name_list.append(dict_item['name'])
         tab_data_list.append(dict_item['tab_data'].unsqueeze(0))
-    
-    return {'image': torch.cat(img_list,dim=0), 'diagnosis_after_12_months': torch.cat(label_list,dim=0), 'name': name_list, 'tab_data': torch.cat(tab_data_list,dim=0)}
-
-def crop(image):
-    size = np.array(np.shape(image))
-    crop_idx = np.rint((size - minimum_size) / 2).astype(int)
-    first_crop = copy(crop_idx)
-    second_crop = copy(crop_idx)
-    for i in range(3):
-        if minimum_size[i] + first_crop[i] * 2 != size[i]:
-            first_crop[i] -= 1
-
-    cropped_image = image[first_crop[0]:size[0]-second_crop[0],
-                          first_crop[1]:size[1]-second_crop[1],
-                          first_crop[2]:size[2]-second_crop[2]]
-
-    return cropped_image
-
 
 def pad(image):
     size = np.array(np.shape(image))
@@ -114,13 +111,12 @@ def transform_bids_image(reading_img, transform='crop'):
     #print(rescale_image)
     return rescale_image
 
-
 class BidsMriBrainDataset(Dataset):
-    """Dataset of subjects of CLINICA (baseline only) from BIDS"""
+    #Dataset of subjects of CLINICA (baseline only) from BIDS
 
     def __init__(self, subjects_df_path, transform=None, classes=3, rescale='crop'):
+        
         """
-
         :param subjects_df_path: Path to a TSV file with the list of the subjects in the dataset
         :param caps_dir: The BIDS directory where the images are stored
         :param transform: Optional transform to be applied to a sample
@@ -175,6 +171,45 @@ class BidsMriBrainDataset(Dataset):
         diagnosis_code = [self.diagnosis_code[diagnosis] for diagnosis in diagnosis_list]
         return diagnosis_code
 
+def get_dict(path,transform=None,rescale='crop'):
+    subjects_df = pd.read_csv(path, index_col=0, header=0)
+    subjects_list = subjects_df['participant_id'].values.tolist() 
+    samples=[]
+    print("starting dict")
+    for s in range(len(subjects_list)):
+    #for s in range(3):
+        #if s == 2:print("finished loading 1 image in dict")
+        if s % 30 == 0: print("finished loading ",s," images in dict") 
+        subj_name = subjects_df.loc[s, 'participant_id']
+        image_path = subjects_df.loc[s, 'img_dir']
+        reading_image = nib.load(image_path)
+        image = transform_bids_image(reading_image, rescale)
+
+        diagnosis_after = subjects_df.loc[s, 'diagnosis_12month']
+        diagnosis_code = {'CN': 0, 'AD': 1, 'MCI': 2, 'LMCI': 2,'EMCI':2}
+        remove_list = ['participant_id','session_id','alternative_id_1','diagnosis_sc','diagnosis_12month', 'data_dir','img_dir']
+        if type(diagnosis_after) is str:
+            diagnosis = diagnosis_code[diagnosis_after]
+        tab_columns = [i for i in subjects_df.columns if i not in remove_list]
+        tab_data = np.array(subjects_df.loc[s, tab_columns]).astype(np.float32)
+        
+        sample = {'image': image, 'diagnosis_after_12_months':diagnosis, 'name': subj_name, 'tab_data': tab_data}
+        sample = transform(sample)
+        #print(sample['image'],"printing in get_dict")
+        samples.append(sample)
+    return samples
+        
+class MriDataset(Dataset):
+    def __init__(self,samples):
+        self.samples = samples
+    #def subjects_list(self):
+     #   return self.samples['subj_name']
+    def __getitem__(self, subj_idx):
+        return {'image': self.samples[subj_idx]['image'], 'diagnosis_after_12_months':self.samples[subj_idx]['diagnosis_after_12_months'], 'name': self.samples[subj_idx]['name'], 'tab_data': self.samples[subj_idx]['tab_data']}
+    def __len__(self):
+        return len(self.samples)
+    
+    
 
 class GaussianSmoothing(object):
 
@@ -215,16 +250,6 @@ class ToTensor(object):
                     'name': name,
                     'tab_data': torch.from_numpy(sample['tab_data']).float()}
 
-# class ToTensor(object):
-#     """Convert image type to Tensor and diagnosis to diagnosis code"""
-
-#     def __init__(self, gpu=False):
-#         self.operator = transforms.ToTensor()
-
-#     def __call__(self, sample):
-#         sample['image'] = self.operator(sample['image']).unsqueeze(0)
-#         return sample
-
 
 class MeanNormalization(object):
     """Normalize images using a .nii file with the mean values of all the subjets"""
@@ -261,12 +286,35 @@ class LeftHippocampusSegmentation(object):
 
 if __name__ == '__main__':
     import torchvision
-    train_path='/scratch/di2078/shared/MLH/data/train.csv'
-    test_path='/scratch/di2078/shared/MLH/data/test.csv'
-    valid_path='/scratch/di2078/shared/MLH/data/val.csv'
     sigma = 0
-    composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),])
-    trainset = BidsMriBrainDataset(train_path, transform=composed)
-    testset = BidsMriBrainDataset(test_path, transform=composed)
-    validset = BidsMriBrainDataset(valid_path, transform=composed)
+    train_path='/scratch/yx2105/shared/MLH/data/train.csv'
+    test_path='/scratch/yx2105/shared/MLH/data/test.csv'
+    valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
+    sigma = 0
+    composed = torchvision.transforms.Compose([GaussianSmoothing(0), ToTensor(True)])
     
+    s = get_dict(train_path,transform=composed)
+    trainset = Dataset(s)
+    
+    
+    s1 = get_dict(test_path,transform=composed)
+    testset = Dataset(s1)
+    
+    
+    s2 = get_dict(valid_path,transform=composed)
+    validset = Dataset(s2)
+
+    
+    import pickle
+    with open("valid_pickle", "wb") as f:
+         pickle.dump(s2, f)
+    with open("test_pickle", "wb") as f:
+         pickle.dump(s1, f)
+    with open("train_pickle", "wb") as f:
+         pickle.dump(s, f)
+    #with open("try", "rb") as f:
+     #    a = pickle.load(f)
+    
+
+    #if ( torch.equal(a[0]['image'] ,validset[0]['image'])): print("valid istrue")
+    #else:print("FALSE")
