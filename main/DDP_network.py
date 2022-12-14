@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from os import path
 import os
 import pandas as pd
 import torch.nn.init as init
@@ -9,9 +8,22 @@ import torch.optim as optim
 from time import time
 from copy import copy, deepcopy
 import numpy as np
-
+from torch.utils.data import DataLoader
+from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, MriDataset
+from training_functions import run
+import torchvision
+import torch.multiprocessing as mp
+import torch.distributed as dist
+import time
+import nibabel as nib
+from nilearn import plotting
+from skimage.transform import resize
+from scipy.ndimage.filters import gaussian_filter
+from nilearn.image import mean_img
+from torchmetrics import MetricCollection
 import torchmetrics
 from model import *
+import torchio as tio
 
 def weights_init(m):
     """Initialize the weights of convolutional and fully connected layers"""
@@ -49,13 +61,13 @@ def test(model, dataloader, metric, classifier, device, verbose=True):
             all_prediction_scores.append(pred_scores)
             print('Step {} / total {} processed'.format(step, len(dataloader)))
 
-    acc = metric.compute().cpu().data.numpy()
+    valid_metric = metric.compute()
     if verbose:
-        print('Validation ACC: ' + str(acc))
+        print('Validation ACC: ' + str(valid_metric['MulticlassAccuracy'].cpu().data.numpy()))
     metric.reset()
 
     all_prediction_scores = torch.cat(all_prediction_scores,0).cpu().data.numpy()
-    return acc, all_prediction_scores
+    return valid_metric, all_prediction_scores
 
 def compute_balanced_accuracy(predicted_list, truth_list):
     # Computation of the balanced accuracy
@@ -83,21 +95,10 @@ def compute_balanced_accuracy(predicted_list, truth_list):
     
 ####################################################################################
 
-def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, optimizer, device, batch_size=4,  epochs=100, results_path='scratch/di2078/results', model_name='model', classifier='vgg'):
-    from torch.utils.data import DataLoader
-    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, MriDataset
-    from training_functions import run
-    import torchvision
-    import torch.multiprocessing as mp
-    import torch.distributed as dist
-    import time
-    import nibabel as nib
-    import numpy as np
-    from nilearn import plotting
-    from skimage.transform import resize
-    from scipy.ndimage.filters import gaussian_filter
-    from nilearn.image import mean_img
-    
+def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, optimizer, device, batch_size=4,  
+            epochs=100, results_path='scratch/di2078/results', model_name='model', classifier='vgg',
+            phase = 'training', model_path = None):
+
     ############################################################
     rank = nr * gpus + gpu
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -113,23 +114,24 @@ def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, op
     torch.manual_seed(0)
     torch.cuda.set_device(gpu)
     model.cuda(gpu)
-    print(batch_size)
     
-    composed = torchvision.transforms.Compose([GaussianSmoothing(0), ToTensor(True)])
+    #composed = torchvision.transforms.Compose([GaussianSmoothing(0), ToTensor(True)])
+
     train_path='/scratch/yx2105/shared/MLH/data/train.csv'
     test_path='/scratch/yx2105/shared/MLH/data/test.csv'
     valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
     sigma = 0
     
-    trainset = MriDataset(train_list)
-    testset = MriDataset(test_list)
-    validset = MriDataset(valid_list)
+    composed = tio.transforms.Compose([tio.RandomFlip(axes=(0,1,2)),tio.RandomBlur(std=0.3)])
+    trainset = MriDataset(train_list, composed)
+    testset = MriDataset(test_list, None)
+    validset = MriDataset(valid_list, None)
     
-    trainset = MriDataset(train_list)
-    testset = MriDataset(test_list)
-    validset = MriDataset(valid_list)
-    image1 = trainset[100]['image']
-    image2 = trainset[1200]['image']
+    # trainset = MriDataset(train_list)
+    # testset = MriDataset(test_list)
+    # validset = MriDataset(valid_list)
+    # image1 = trainset[100]['image']
+    # image2 = trainset[1200]['image']
     #testing_image = nib.Nifti1Image(image1.numpy(), affine=np.eye(4))
     #anat = plotting.plot_anat(testing_image, title='subject ' + trainset[100]['name'], cut_coord=None)
     #anat.savefig('testing_image_1.png')
@@ -138,19 +140,18 @@ def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, op
     #anat.savefig('testing_image_2.png')
     
     
-    
-    
-    #trainset = BidsMriBrainDataset(train_path, transform=composed)
-    #testset = BidsMriBrainDataset(test_path, transform=composed)
-    #validset = BidsMriBrainDataset(valid_path, transform=composed)
+    # trainset = BidsMriBrainDataset(train_path, transform=composed)
+    # testset = BidsMriBrainDataset(test_path, transform=composed)
+    # validset = BidsMriBrainDataset(valid_path, transform=composed)
+
     train_sampler = torch.utils.data.distributed.DistributedSampler(
-        trainset,num_replicas=world_size,rank=rank)
+        trainset, shuffle=True, num_replicas=world_size, rank=rank)
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=train_sampler)
     test_sampler = torch.utils.data.distributed.DistributedSampler(
-        testset,num_replicas=world_size,rank=rank)
+        testset, shuffle=False, num_replicas=world_size, rank=rank)
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=test_sampler)
     valid_sampler = torch.utils.data.distributed.DistributedSampler(
-        validset,num_replicas=world_size,rank=rank)
+        validset, shuffle=False, num_replicas=world_size, rank=rank)
     validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=0,pin_memory=True,sampler=valid_sampler)
     ############################################################
 
@@ -164,7 +165,11 @@ def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, op
    
 
     # prepare metrics
-    metric = torchmetrics.Accuracy(task="multiclass", num_classes=3, average='macro')
+    acc_metric = torchmetrics.Accuracy(task="multiclass", num_classes=3, average='macro')
+    auroc_metric = torchmetrics.AUROC(task="multiclass", num_classes=3)
+    f1_metric = torchmetrics.F1Score(task="multiclass", num_classes=3)
+    metric = MetricCollection([acc_metric, auroc_metric, f1_metric ])
+
     model.metric = metric
     model.to(gpu)
     model = nn.parallel.DistributedDataParallel(model,device_ids=[gpu])
@@ -175,8 +180,8 @@ def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, op
 
     # prepare result file
     
-    results_df = pd.DataFrame(columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
-    filename = path.join(results_path, 'performance.csv')
+    results_df = pd.DataFrame(columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation', 'auroc_validation', 'f1-score_validation'])
+    filename = os.path.join(results_path, 'performance.csv')
     
     with open(filename, 'w') as f:
             results_df.to_csv(f, index=False, sep='\t')
@@ -187,78 +192,96 @@ def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, op
     best_model = copy(model)
     print('Before training epoch')
     # The program stops when the network learnt the training data
-    epoch = 0
-    acc_valid = 0
-    while epoch < epochs: #and acc_train < 100 - tol:
+    if phase == 'training':
+        epoch = 0
+        acc_valid = 0
+        while epoch < epochs: #and acc_train < 100 - tol:
 
-        loss_train = []
-        running_loss = 0
-        for i, data in enumerate(trainloader, 0):
-            trainloader.sampler.set_epoch(epoch)
-            #inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)
-            inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True)
-            optimizer.zero_grad()
-            if 'joint' in classifier:
-                tab_inputs = data['tab_data'].to(device)
-                outputs = model(inputs, tab_inputs)
-            else:
-                outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            loss_train = []
+            running_loss = 0
+            for i, data in enumerate(trainloader, 0):
+                trainloader.sampler.set_epoch(epoch)
+
+                inputs, labels = data['image'].cuda(non_blocking=True), data['diagnosis_after_12_months'].cuda(non_blocking=True)
+                optimizer.zero_grad()
+                if 'joint' in classifier:
+                    tab_inputs = data['tab_data'].to(device)
+                    outputs = model(inputs, tab_inputs)
+                else:
+                    outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                
+                loss.backward()
+                optimizer.step()
+
+                loss_train.append(loss.item())
+
+                # save for compute train acc
+                preds_score = F.softmax(outputs, 1)
+                acc_train_collection = metric(preds_score, labels)
+                
+                acc_train_batch = acc_train_collection['MulticlassAccuracy']
+                # print statistics
+                running_loss += loss.item()
+                if i % 5 == 4:  # print every 10 mini-batches
+                    print('Training epoch %d : step %d / %d loss: %f' %
+                        (epoch + 1,  i + 1, len(trainloader),running_loss))
+                    print('ACC train at this batch: {}'.format(acc_train_batch))
+                    running_loss = 0.0
             
-            loss.backward()
-            optimizer.step()
+            print('Finished Epoch: %d' % (epoch + 1))
+            save_interval = 1
+            # save performance
+            if results_path is not None and epoch % save_interval == save_interval - 1:
+                # compute train acc
+                metric_train = metric.compute()
+                acc_train = metric_train['MulticlassAccuracy'].cpu().data.numpy()
+                print('Training ACC: {}'.format(acc_train))
+                metric.reset()
+                training_time = time.time() - t0
 
-            loss_train.append(loss.item())
+                # evaluate and compute val metric
+                metric_valid, all_prediction_scores = test(model, validloader, metric, classifier, device=device)
 
-            # save for compute train acc
-            preds_score = F.softmax(outputs, 1)
-            acc_train_batch = metric(preds_score, labels)
-
-            # print statistics
-            running_loss += loss.item()
-            if i % 5 == 4:  # print every 10 mini-batches
-                print('Training epoch %d : step %d / %d loss: %f' %
-                      (epoch + 1,  i + 1, len(trainloader),running_loss))
-                print('ACC train at this batch: {}'.format(acc_train_batch))
-                running_loss = 0.0
-        
-        print('Finished Epoch: %d' % (epoch + 1))
-        save_interval = 1
-        # save performance
-        if results_path is not None and epoch % save_interval == save_interval - 1:
-            # compute train acc
-            acc_train = metric.compute().cpu().data.numpy()
-            print('Training ACC: {}'.format(acc_train))
-            metric.reset()
-            training_time = time.time() - t0
-
-            # evaluate and compute val metric
-            acc_valid, all_prediction_scores = test(model, validloader, metric, classifier, device=device)
-            if rank == 0:
-                row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
-                            ]).reshape(1, -1)
-                row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])                                  
-                with open(filename, 'a') as f:
-                    row_df.to_csv(f, header=False, index=False, sep='\t')
-
-            # save model
-            if acc_valid > acc_valid_max:
-                acc_valid_max = copy(acc_valid)
-                best_epoch = copy(epoch)
-                best_model = deepcopy(model)
+                acc_valid = metric_valid['MulticlassAccuracy'].cpu().data.numpy()
+                auroc_valid = metric_valid['MulticlassAUROC'].cpu().data.numpy()
+                f1_valid = metric_valid['MulticlassF1Score'].cpu().data.numpy()
                 if rank == 0:
-                    torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
-                np.save(os.path.join(results_path,"predictions_best_val"), all_prediction_scores)
-        print('Validation finished Epoch: {}'.format(epoch + 1))
-        epoch += 1
+                    row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid, auroc_valid, f1_valid
+                                ]).reshape(1, -1)
+                    row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation', 'auroc_validation', 'f1-score_validation'])                                  
+                    with open(filename, 'a') as f:
+                        row_df.to_csv(f, header=False, index=False, sep='\t')
 
-    parameters_found = {'training_time': time() - t0,
-            'best_epoch': best_epoch,
-            'best_model': best_model,
-            'acc_valid_max': acc_valid_max
-           }
+                # save model
+                if acc_valid > acc_valid_max:
+                    acc_valid_max = copy(acc_valid)
+                    auroc_valid_max = copy(auroc_valid)
+                    f1_valid_max = copy(f1_valid)
+                    best_epoch = copy(epoch)
+                    best_model = deepcopy(model)
+                    if rank == 0:
+                        torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
+                    np.save(os.path.join(results_path,"predictions_best_val"), all_prediction_scores)
+            print('Validation finished Epoch: {}'.format(epoch + 1))
+            epoch += 1
 
-    #parameters_found = train_DDP(gpu, model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=results_path, model_name='model', tol=0.0)
+        if rank == 0:
+            row = np.array([best_epoch, time.time() - t0, 000 , 000 , acc_valid_max, auroc_valid_max,f1_valid_max
+                        ]).reshape(1, -1)
+            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation', 'auroc_validation', 'f1-score_validation'])                                  
+            with open(filename, 'a') as f:
+                row_df.to_csv(f, header=False, index=False, sep='\t')
+
+
+    elif phase == 'inference':
+        weights = torch.load(model_path)
+        model.load_state_dict(weights)
+        metric_test, all_prediction_scores = test(model, testloader, device=device, classifier = train_args['classifier'])
+
+        np.save(os.path.join(results_path,"predictions_best_test"), all_prediction_scores)
+        print(metric_test)
+     #parameters_found = train_DDP(gpu, model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=results_path, model_name='model', tol=0.0)
     
 ####################################################################################
 if __name__ == '__main__':
@@ -280,7 +303,12 @@ if __name__ == '__main__':
     #####################################################
     parser.add_argument("results_path", type=str,
                         help="where the outputs are stored")
-
+    parser.add_argument("--phase", type=str, default='training',
+                        help='[training, inference]')
+    parser.add_argument("--model_path", type=str, default='/path/to/model/weights',
+                        help='classifier selected')
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='Number of classes in the dataset')
     # Network structure
     parser.add_argument("--classifier", type=str, default='basic',
                         help='classifier selected')
@@ -309,8 +337,8 @@ if __name__ == '__main__':
     else:
         device = torch.device('cpu')
     lr = args.learning_rate * 0.00005
-    results_path = path.join(args.results_path, args.name)
-    if not path.exists(results_path):
+    results_path = os.path.join(args.results_path, args.name)
+    if not os.path.exists(results_path):
         os.makedirs(results_path)
 
 
@@ -326,7 +354,7 @@ if __name__ == '__main__':
 
     # Initialization
     classifier.apply(weights_init)
-    optimizer = optim.Adam(filter(lambda param: param.requires_grad, classifier.parameters()), lr=lr,weight_decay=1e-4)
+    optimizer = optim.Adam(filter(lambda param: param.requires_grad, classifier.parameters()), lr=lr,weight_decay=1e-5)
     ########################################
     # Training
     import pickle
@@ -344,7 +372,8 @@ if __name__ == '__main__':
     ######################################
 
     world_size = args.gpus * args.nodes
-    torch.multiprocessing.spawn(run_DDP, args=(train_list,test_list,valid_list,args.nr,args.gpus,world_size, classifier, optimizer, device, args.batch_size, 100, results_path, 'model', args.classifier), nprocs=args.gpus)
+    torch.multiprocessing.spawn(run_DDP, args=(train_list,test_list,valid_list,args.nr,args.gpus,world_size, classifier, 
+                        optimizer, device, args.batch_size, args.epochs, results_path, 'model', args.classifier, args.phase, args.model_path), nprocs=args.gpus)
     
 
 

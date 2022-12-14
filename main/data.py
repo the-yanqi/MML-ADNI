@@ -171,6 +171,7 @@ class BidsMriBrainDataset(Dataset):
         diagnosis_code = [self.diagnosis_code[diagnosis] for diagnosis in diagnosis_list]
         return diagnosis_code
 
+
 def get_dict(path,transform=None,rescale='crop'):
     subjects_df = pd.read_csv(path, index_col=0, header=0)
     subjects_list = subjects_df['participant_id'].values.tolist() 
@@ -185,7 +186,7 @@ def get_dict(path,transform=None,rescale='crop'):
         reading_image = nib.load(image_path)
         image = transform_bids_image(reading_image, rescale)
 
-        diagnosis_after = subjects_df.loc[s, 'diagnosis_12month']
+        diagnosis_after = subjects_df.loc[s, 'diagnosis_sc']
         diagnosis_code = {'CN': 0, 'AD': 1, 'MCI': 2, 'LMCI': 2,'EMCI':2}
         remove_list = ['participant_id','session_id','alternative_id_1','diagnosis_sc','diagnosis_12month', 'data_dir','img_dir']
         if type(diagnosis_after) is str:
@@ -200,16 +201,36 @@ def get_dict(path,transform=None,rescale='crop'):
     return samples
         
 class MriDataset(Dataset):
-    def __init__(self,samples):
+    def __init__(self,samples, transform=None):
         self.samples = samples
+        self.transform = transform
     #def subjects_list(self):
      #   return self.samples['subj_name']
     def __getitem__(self, subj_idx):
-        return {'image': self.samples[subj_idx]['image'], 'diagnosis_after_12_months':self.samples[subj_idx]['diagnosis_after_12_months'], 'name': self.samples[subj_idx]['name'], 'tab_data': self.samples[subj_idx]['tab_data']}
+        img = self.samples[subj_idx]['image']
+        if self.transform is not None:
+            img = self.transform(img)
+        img = self.standardizer(img)
+        return {'image': img, 'diagnosis_after_12_months':self.samples[subj_idx]['diagnosis_after_12_months'], 'name': self.samples[subj_idx]['name'], 'tab_data': self.samples[subj_idx]['tab_data']}
+    
     def __len__(self):
         return len(self.samples)
     
+    def standardizer(self, img):
+        img = (img - img.mean()) / np.maximum(img.std(), 10 ** (-5))
+        return img
     
+
+class Standardizer(object):
+
+    def __init__(self):
+        pass
+
+    def __call__(self, sample):
+        img = sample["img"]
+        img = (img - img.mean()) / np.maximum(img.std(), 10 ** (-5))
+        sample["img"] = img
+        return sample
 
 class GaussianSmoothing(object):
 

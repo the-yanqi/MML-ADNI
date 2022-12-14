@@ -238,8 +238,8 @@ class CNNModel(nn.Module):
         
         self.conv_layer1 = self._conv_layer_set(1, 32)
         self.conv_layer2 = self._conv_layer_set(32, 64)
-        self.conv_layer3 = self._conv_layer_set(64, 128, dropout=True)
-        self.conv_layer4 = self._conv_layer_set(128, 128, dropout=True)
+        self.conv_layer3 = self._conv_layer_set(64, 128)
+        self.conv_layer4 = self._conv_layer_set(128, 128)
         self.conv_layer5 = self._conv_layer_set(128, 32)
         self.fc1 = nn.Linear(32 * 3 * 4 * 3, 128)
         self.fc2 = nn.Linear(128, n_classes)
@@ -248,7 +248,7 @@ class CNNModel(nn.Module):
         self.drop=nn.Dropout(p=0.15)       
         self.flatten = nn.Flatten() 
         
-    def _conv_layer_set(self, in_c, out_c, dropout=True):
+    def _conv_layer_set(self, in_c, out_c, dropout=False):
         
         modules = [nn.Conv3d(in_c, out_c, kernel_size=(3, 3, 3), padding=1),
         nn.LeakyReLU(),
