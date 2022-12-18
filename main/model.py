@@ -79,6 +79,7 @@ class joint_model(nn.Module):
         nn.Conv3d(32, 64, kernel_size=(3, 3, 3), padding=1),
         nn.LeakyReLU(),
         nn.MaxPool3d((2, 2, 2)),
+        nn.Dropout(0.25),
 
         nn.Conv3d(64, 128, kernel_size=(3, 3, 3), padding=1),
         nn.LeakyReLU(),
@@ -87,6 +88,7 @@ class joint_model(nn.Module):
         nn.Conv3d(128, 128, kernel_size=(3, 3, 3), padding=1),
         nn.LeakyReLU(),
         nn.MaxPool3d((2, 2, 2)),
+        nn.Dropout(0.25),
 
         nn.Conv3d(128, 32, kernel_size=(3, 3, 3), padding=1),
         nn.LeakyReLU(),
@@ -105,6 +107,7 @@ class joint_model(nn.Module):
         nn.Conv3d(32, 64, 3, padding=1),
         nn.ReLU(),
         nn.MaxPool3d(2, 2),
+        nn.Dropout(0.25),
 
         nn.Conv3d(64, 128, 3, padding=1),
         nn.ReLU(),
@@ -117,12 +120,14 @@ class joint_model(nn.Module):
         nn.Conv3d(256, 256, 3, padding=1),
         nn.ReLU(),
         nn.MaxPool3d(2, 2),
+        nn.Dropout(0.25),
 
         nn.Conv3d(256, 256, 3, padding=1),
         nn.ReLU(),
         nn.Conv3d(256, 256, 3, padding=1),
         nn.ReLU(),
         nn.MaxPool3d(2, 2),
+        nn.Dropout(0.25),
 
         nn.Conv3d(256, 32, 1),
         nn.ReLU())
@@ -201,6 +206,7 @@ class VGG(nn.Module):
         self.conv7 = nn.Conv3d(256, 32, 1)
         self.fc1 = nn.Linear(32 * 3 * 4 * 3, 128)
         self.fc2 = nn.Linear(128, n_classes)
+        self.dropout = nn.Dropout(0.25)
 
     def feature_extractor(self, x):
         x = F.relu(self.conv1(x))
@@ -208,22 +214,26 @@ class VGG(nn.Module):
 
         x = F.relu(self.conv2(x))
         x = self.pool(x)
+        #x = self.dropout(x)
 
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
         x = self.pool(x)
+        x = self.dropout(x)
 
         x = F.relu(self.conv5(x))
         x = F.relu(self.conv6(x))
         x = self.pool(x)
+        #x = self.dropout(x)
 
         x = F.relu(self.conv8(x))
         x = F.relu(self.conv9(x))
         x = self.pool(x)
+        
 
         x = F.relu(self.conv7(x))
         x = x.view(-1, 32 * 3 * 4 * 3)
-        
+        x = self.dropout(x)
         return x
 
     def forward(self, x):
@@ -237,9 +247,9 @@ class CNNModel(nn.Module):
         super(CNNModel, self).__init__()
         
         self.conv_layer1 = self._conv_layer_set(1, 32)
-        self.conv_layer2 = self._conv_layer_set(32, 64)
+        self.conv_layer2 = self._conv_layer_set(32, 64, dropout=False)
         self.conv_layer3 = self._conv_layer_set(64, 128)
-        self.conv_layer4 = self._conv_layer_set(128, 128)
+        self.conv_layer4 = self._conv_layer_set(128, 128,dropout=False)
         self.conv_layer5 = self._conv_layer_set(128, 32)
         self.fc1 = nn.Linear(32 * 3 * 4 * 3, 128)
         self.fc2 = nn.Linear(128, n_classes)

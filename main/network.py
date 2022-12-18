@@ -8,7 +8,6 @@ import torch.nn.init as init
 import torch.optim as optim
 
 
-
 def weights_init(m):
     """Initialize the weights of convolutional and fully connected layers"""
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
@@ -16,93 +15,9 @@ def weights_init(m):
         init.xavier_normal_(m.weight.data)
 
 
-def train(model, trainloader, validloader, epochs=1000, save_interval=5, results_path=None, model_name='model', tol=0.0,
-          gpu=False, lr=0.1):
-    #changed learning rate
-    """
-    Training a model using a validation set to find the best parameters
-
-    :param model: The neural network to train
-    :param trainloader: A Dataloader wrapping the training set
-    :param validloader: A Dataloader wrapping the validation set
-    :param epochs: Maximal number of epochs
-    :param save_interval: The number of epochs before a new tests and save
-    :param results_path: the folder where the results are saved
-    :param model_name: the name given to the results files
-    :param tol: the tolerance allowing the model to stop learning, when the training accuracy is (100 - tol)%
-    :param gpu: boolean defining the use of the gpu (if not cpu are used)
-    :param lr: the learning rate used by the optimizer
-    :return:
-        total training time (float)
-        epoch of best accuracy for the validation set (int)
-        parameters of the model corresponding to the epoch of best accuracy
-    """
-    filename = path.join(results_path, model_name + '.tsv')
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr=lr)
-    results_df = pd.DataFrame(columns=['epoch', 'training_time', 'acc_train', 'acc_validation'])
-    with open(filename, 'w') as f:
-        results_df.to_csv(f, index=False, sep='\t')
-
-    t0 = time()
-    acc_valid_max = 0
-    best_epoch = 0
-    best_model = copy(model)
-
-    # The program stops when the network learnt the training data
-    epoch = 0
-    acc_train = 0
-    
-    while epoch < epochs and acc_train < 100 - tol:
-
-        running_loss = 0
-        for i, data in enumerate(trainloader, 0):
-            if gpu:
-                inputs, labels = data['image'].cuda(), data['diagnosis'].cuda()
-            else:
-                inputs, labels = data['image'], data['diagnosis']
-            optimizer.zero_grad()
-            outputs = model(inputs, train=True)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            # print statistics
-            running_loss += loss.item()
-            if i % 10 == 9:  # print every 10 mini-batches
-                print('[%d, %d] loss: %f' %
-                      (epoch + 1, i + 1, running_loss))
-                running_loss = 0.0
-
-        print('Finished Epoch: %d' % (epoch + 1))
-
-        if results_path is not None and epoch % save_interval == save_interval - 1:
-            training_time = time() - t0
-            acc_train = test(model, trainloader, gpu)
-            acc_valid = test(model, validloader, gpu)
-            row = np.array([epoch + 1, training_time, acc_train, acc_valid]).reshape(1, -1)
-
-            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'acc_train', 'acc_validation'])
-            with open(filename, 'a') as f:
-                row_df.to_csv(f, header=False, index=False, sep='\t')
-
-            if acc_valid > acc_valid_max:
-                acc_valid_max = copy(acc_valid)
-                best_epoch = copy(epoch)
-                best_model = deepcopy(model)
-
-        epoch += 1
-
-    return {'training_time': time() - t0,
-            'best_epoch': best_epoch,
-            'best_model': best_model,
-            'acc_valid_max': acc_valid_max}
-
-
 
 if __name__ == '__main__':
-    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, collate_func_img
+    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, collate_func_img, MriDataset
     from training_functions import run
     import torchvision
     import argparse
@@ -142,9 +57,11 @@ if __name__ == '__main__':
                         help='Dropout rate before FC layers')
     parser.add_argument('--batch_size', '-batch', type=int, default=4,
                         help="The size of the batches to train the network")
-    parser.add_argument("--model_path", type=str, default='basic',
+    parser.add_argument("--model_path", type=str, default='none',
                         help='checkpoint path')
     parser.add_argument("--phase", type=str, default='training',
+                        help='experiment phase, ')
+    parser.add_argument("--freeze", action='store_true', default=False,
                         help='experiment phase, ')
 
     # Managing output
@@ -205,15 +122,32 @@ if __name__ == '__main__':
         classifier = VGG(n_classes=args.n_classes).to(device=device)
     elif args.classifier == 'cnn':
         classifier = CNNModel(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'joint':
-        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier='vgg').to(device=device)
+    elif 'joint' in args.classifier:
+        img_classifier = args.classifier.split('_')[-1]
+        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier=img_classifier).to(device=device)
     else:
         raise ValueError('Unknown classifier')
 
+    import pickle
+    
+    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/train_pickle_1", "rb") as f:
+         train_list = pickle.load(f)
+    print("loaded train")
+    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/test_pickle_1", "rb") as f1:
+         test_list = pickle.load(f1)
+    print("loaded test")
+
+    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/valid_pickle_1", "rb") as f2:
+         valid_list = pickle.load(f2)
+    print("loaded valid")
+        
+    trainset = MriDataset(train_list, None)
+    testset = MriDataset(test_list, None)
+    validset = MriDataset(valid_list, None)
     # Initialization
     classifier.apply(weights_init)
     optimizer = optim.Adam(filter(lambda param: param.requires_grad, classifier.parameters()), lr=lr,weight_decay=1e-4)
 
     # Training
     best_params = run(classifier, trainset, validset, testset, optimizer, device=device, batch_size=args.batch_size, epochs=args.epochs, phase=args.phase, results_path=results_path, model_name=args.name,
-                                   save_interval=args.save_interval, classifier = args.classifier)
+                                   save_interval=args.save_interval, classifier = args.classifier, model_path = args.model_path)

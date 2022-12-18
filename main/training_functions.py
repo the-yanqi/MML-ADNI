@@ -11,7 +11,7 @@ import torch.nn.init as init
 import os
 from data import collate_func_img
 from sklearn.metrics import roc_auc_score
-
+from collections import OrderedDict
 
 class CrossValidationSplit:
     """A class to create training and validation sets for a k-fold cross validation"""
@@ -134,7 +134,7 @@ def adjust_learning_rate(optimizer, value):
         param_group['lr'] = lr
 
 
-def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=None, model_name='model', tol=0.0, classifier='vgg'):
+def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=None, model_name='model', tol=0.0, classifier='vgg', model_path = 'none', freeze=False):
     """
     Training a model using a validation set to find the best parameters
 
@@ -153,6 +153,15 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
         epoch of best accuracy for the validation set (int)
         parameters of the model corresponding to the epoch of best accuracy
     """
+    if freeze:
+        for name, p in model.named_parameters():
+            p.requires_grad = False
+            
+        linear_model = nn.Sequential(nn.Linear(32 * 3 * 4 * 3, 128),
+                                    nn.Linear(128, 3)).to(device)
+ 
+
+
     filename = path.join(results_path, 'performance.csv')
 
     criterion = nn.CrossEntropyLoss()
@@ -179,10 +188,19 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
             inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)      
             optimizer.zero_grad()
             if 'joint' in classifier:
-                tab_inputs = data['tab_data'].to(device)
-                outputs = model(inputs, tab_inputs)
+                if freeze:
+                    img_features = model.classifier(inputs)
+                    outputs = linear_model(img_features)
+                else:
+                    tab_inputs = data['tab_data'].to(device)
+                    outputs = model(inputs, tab_inputs)
+                
             else:
-                outputs = model(inputs)
+                if freeze:
+                    img_features = model.feature_extractor(inputs)
+                    outputs = linear_model(img_features)
+                else:
+                    outputs = model(inputs)
             loss = criterion(outputs, labels)
             
             loss.backward()
@@ -212,7 +230,7 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
             print('Training ACC: {}'.format(acc_train))
 
             training_time = time() - t0
-            acc_valid, all_prediction_scores = test(model, validloader, device=device, classifier=classifier)
+            acc_valid, all_prediction_scores = test(model, validloader, device=device, classifier=classifier, freeze = freeze)
 
             row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
                            ]).reshape(1, -1)
@@ -238,7 +256,7 @@ def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_
            }
 
 
-def test(model, dataloader, device, verbose=True, classifier='vgg'):
+def test(model, dataloader, device, verbose=True, classifier='vgg', freeze =False):
     """
     Computes the balanced accuracy of the model
 
@@ -256,11 +274,20 @@ def test(model, dataloader, device, verbose=True, classifier='vgg'):
     with torch.no_grad():
         for step, sample in enumerate(dataloader):
             images, diagnoses = sample['image'].to(device), sample['diagnosis_after_12_months'].to(device)
-            if 'joint' == classifier:
-                tab_inputs = sample['tab_data'].to(device)
-                outputs = model(images, tab_inputs)
+            if 'joint' in classifier:
+                if freeze:
+                    img_features = model.classifier(images)
+                    outputs = linear_model(img_features)
+                else:
+                    tab_inputs = sample['tab_data'].to(device)
+                    outputs = model(images, tab_inputs)
             else:
-                outputs = model(images)
+                if freeze:
+                    img_features = model.feature_extractor(images)
+                    outputs = linear_model(img_features)
+                else:
+                    outputs = model(images)
+
             # save for compute train acc
             pred_scores = F.softmax(outputs,1)
 
@@ -272,10 +299,8 @@ def test(model, dataloader, device, verbose=True, classifier='vgg'):
 
     acc = compute_balanced_accuracy(predicted_list, truth_list)
 
-    auroc = roc_auc_score(truth_list, predicted_list, multi_class="ovr")
     if verbose:
         print('Validation ACC: ' + str(acc))
-        print('Validation AUC: ' + str(auroc))
 
     all_prediction_scores = torch.cat(all_prediction_scores,0).cpu().data.numpy()
 
@@ -319,6 +344,15 @@ def run(model, trainset, validset, testset, optimizer, device, batch_size=4, pha
     print('Loading complete.')
     
     if phase == 'training':
+        if train_args['model_path'] != 'none':
+            
+            new_weights =  OrderedDict()
+            weights = torch.load(train_args['model_path'])
+            for i, name in enumerate(weights):
+                new_weights[name.replace('module.','')] = weights[name]
+
+            model.load_state_dict(new_weights)
+            
         parameters_found = train(model, trainloader, validloader, optimizer, device, **train_args)
 
     elif phase == 'inference':
