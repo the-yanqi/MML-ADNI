@@ -9,8 +9,7 @@ from time import time
 from copy import copy, deepcopy
 import numpy as np
 from torch.utils.data import DataLoader
-from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, MriDataset, standardizer
-from training_functions import run
+from data import ToTensor, GaussianSmoothing, MriDataset, standardizer
 import torchvision
 import torch.multiprocessing as mp
 import torch.distributed as dist
@@ -332,8 +331,7 @@ def run_DDP(gpu,train_list,test_list,valid_list, nr, gpus, world_size, model, op
     
 ####################################################################################
 if __name__ == '__main__':
-    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing
-    from training_functions import run
+    from data import ToTensor, GaussianSmoothing
     import torchvision
     import argparse
 

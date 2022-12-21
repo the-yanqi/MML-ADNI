@@ -1,1 +1,0 @@
-python network.py /scratch/yx2105/shared/MLH/results/ --classifier vgg --n_classes 3 --batch_size 8 --gpu --learning_rate 0.1
