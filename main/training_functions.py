@@ -1,153 +1,390 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from time import time
 from os import path
-import os
+from copy import copy, deepcopy
 import pandas as pd
+import numpy as np
 import torch.nn.init as init
-import torch.optim as optim
+import os
+from data import collate_func_img
+from sklearn.metrics import roc_auc_score
+from collections import OrderedDict
+
+class CrossValidationSplit:
+    """A class to create training and validation sets for a k-fold cross validation"""
+
+    def __init__(self, dataset, cv=5, stratified=False, shuffle_diagnosis=False, val_prop=0.10):
+        """
+        :param dataset: The dataset to use for the cross validation
+        :param cv: The number of folds to create
+        :param stratified: Boolean to choose if we have the same repartition of diagnosis in each fold
+        """
+
+        self.stratified = stratified
+        subjects_df = dataset.subjects_df
+
+        if type(cv) is int and cv > 1:
+            if stratified:
+                n_diagnosis = len(dataset.diagnosis_code)
+                cohorts = np.unique(dataset.subjects_df.cohort.values)
+
+                preconcat_list = [[] for i in range(cv)]
+                for cohort in cohorts:
+                    for diagnosis in range(n_diagnosis):
+                        diagnosis_key = list(dataset.diagnosis_code)[diagnosis]
+                        diagnosis_df = subjects_df[(subjects_df.diagnosis == diagnosis_key) &
+                                                   (subjects_df.cohort == cohort)]
+
+                        if shuffle_diagnosis:
+                            diagnosis_df = diagnosis_df.sample(frac=1)
+                            diagnosis_df.reset_index(drop=True, inplace=True)
+
+                        for fold in range(cv):
+                            preconcat_list[fold].append(diagnosis_df.iloc[int(fold * len(diagnosis_df) / cv):int((fold + 1) * len(diagnosis_df) / cv):])
+
+                folds_list = []
+
+                for fold in range(cv):
+                    fold_df = pd.concat(preconcat_list[fold])
+                    folds_list.append(fold_df)
+
+            else:
+                folds_list = []
+                for fold in range(cv):
+                    folds_list.append(subjects_df.iloc[int(fold * len(subjects_df) / cv):int((fold + 1) * len(subjects_df) / cv):])
+
+            self.cv = cv
+
+        elif type(cv) is float and 0 < cv < 1:
+            if stratified:
+                n_diagnosis = len(dataset.diagnosis_code)
+                cohorts = np.unique(dataset.subjects_df.cohort.values)
+
+                train_list = []
+                validation_list = []
+                test_list = []
+                for cohort in cohorts:
+                    for diagnosis in range(n_diagnosis):
+                        diagnosis_key = list(dataset.diagnosis_code)[diagnosis]
+                        diagnosis_df = subjects_df[(subjects_df.diagnosis == diagnosis_key) &
+                                                   (subjects_df.cohort == cohort)]
+                        if shuffle_diagnosis:
+                            diagnosis_df = diagnosis_df.sample(frac=1)
+                            diagnosis_df.reset_index(drop=True, inplace=True)
+
+                        train_list.append(diagnosis_df.iloc[:int(len(diagnosis_df) * cv * (1-val_prop)):])
+                        validation_list.append(diagnosis_df.iloc[int(len(diagnosis_df) * cv * (1-val_prop)):
+                                                                 int(len(diagnosis_df) * cv):])
+                        test_list.append(diagnosis_df.iloc[int(len(diagnosis_df) * cv)::])
+                train_df = pd.concat(train_list)
+                validation_df = pd.concat(validation_list)
+                test_df = pd.concat(test_list)
+                folds_list = [validation_df, train_df, test_df]
+
+            else:
+                train_df = subjects_df.iloc[:int(len(subjects_df) * cv * (1-val_prop)):]
+                validation_df = subjects_df.iloc[int(len(subjects_df) * cv * (1-val_prop)):
+                                                 int(len(subjects_df) * cv):]
+                test_df = subjects_df.iloc[int(len(subjects_df) * cv)::]
+                folds_list = [validation_df, train_df, test_df]
+
+            self.cv = 1
+
+        self.folds_list = folds_list
+        self.iter = 0
+
+    def __call__(self, dataset):
+        """
+        Calling creates a new training set and validation set depending on the number of times the function was called
+
+        :param dataset: A dataset from data_loader.py
+        :return: training set, validation set
+        """
+        if self.iter >= self.cv:
+            raise ValueError('The function was already called %i time(s)' % self.iter)
+
+        training_list = copy(self.folds_list)
+
+        validation_df = training_list.pop(self.iter)
+        validation_df.reset_index(inplace=True, drop=True)
+        test_df = training_list.pop(self.iter - 1)
+        test_df.reset_index(inplace=True, drop=True)
+        training_df = pd.concat(training_list)
+        training_df.reset_index(inplace=True, drop=True)
+        self.iter += 1
+
+        training_set = deepcopy(dataset)
+        training_set.subjects_df = training_df
+        validation_set = deepcopy(dataset)
+        validation_set.subjects_df = validation_df
+        test_set = deepcopy(dataset)
+        test_set.subjects_df = test_df
+
+        return training_set, validation_set, test_set
 
 
-def weights_init(m):
-    """Initialize the weights of convolutional and fully connected layers"""
-    if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
-        init.xavier_normal_(m.weight.data)
-        init.xavier_normal_(m.weight.data)
+def adjust_learning_rate(optimizer, value):
+    """Divides the learning rate by the wanted value"""
+    lr_0 = optimizer.param_groups[0]['lr']
+    lr = lr_0 / value
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
 
 
+def train(model, trainloader, validloader, optimizer, device, epochs=1000, save_interval=1, results_path=None, model_name='model', tol=0.0, classifier='vgg', model_path = 'none', freeze=False):
+    """
+    Training a model using a validation set to find the best parameters
 
-if __name__ == '__main__':
-    from data import BidsMriBrainDataset, ToTensor, GaussianSmoothing, collate_func_img, MriDataset
-    from training_functions import run
-    import torchvision
-    import argparse
-    from model import *
-    #print("STARTING......?")
-    parser = argparse.ArgumentParser()
-
-    # Mandatory arguments
-    #parser.add_argument("train_path", type=str,
-     #                   help='path to your list of subjects for training')
-    parser.add_argument("results_path", type=str,
-                        help="where the outputs are stored")
-    #parser.add_argument("caps_path", type=str,
-     #                   help="path to your caps folder")
-
-    # Network structure
-    parser.add_argument("--classifier", type=str, default='basic',
-                        help='classifier selected')
-    parser.add_argument('--n_classes', type=int, default=2,
-                        help='Number of classes in the dataset')
-
-    # Dataset management
-    parser.add_argument('--bids', action='store_true', default=False)
-    parser.add_argument('--sigma', type=float, default=0,
-                        help='Size of the Gaussian smoothing kernel (preprocessing)')
-    parser.add_argument('--rescale', type=str, default='crop',
-                        help='Action to rescale the BIDS without deforming the images')
-
-    # Training arguments
-    parser.add_argument("-e", "--epochs", type=int, default=60,
-                        help="number of loops on the whole dataset")
-    parser.add_argument('-lr', '--learning_rate', type=float, default=1.0,
-                        help='the learning rate of the optimizer (*0.00005)')
-    parser.add_argument('-cv', '--cross_validation', type=int, default=10,
-                        help='cross validation parameter')
-    parser.add_argument('--dropout', '-d', type=float, default=0.5,
-                        help='Dropout rate before FC layers')
-    parser.add_argument('--batch_size', '-batch', type=int, default=4,
-                        help="The size of the batches to train the network")
-    parser.add_argument("--model_path", type=str, default='none',
-                        help='checkpoint path')
-    parser.add_argument("--phase", type=str, default='training',
-                        help='experiment phase, ')
-    parser.add_argument("--freeze", action='store_true', default=False,
-                        help='experiment phase, ')
-
-    # Managing output
-    parser.add_argument("-n", "--name", type=str, default='network',
-                        help="name given to the outputs and checkpoints of the parameters")
-    parser.add_argument("-save", "--save_interval", type=int, default=1,
-                        help="the number of epochs done between the tests and saving")
-
-    # Managing device
-    parser.add_argument('--gpu', action='store_true', default=False,
-                        help='Uses gpu instead of cpu if cuda is available')
-    parser.add_argument('--on_cluster', action='store_true', default=False,
-                        help='to work on the cluster of the ICM')
-
-    args = parser.parse_args()
+    :param model: The neural network to train
+    :param trainloader: A Dataloader wrapping the training set
+    :param validloader: A Dataloader wrapping the validation set
+    :param epochs: Maximal number of epochs
+    :param save_interval: The number of epochs before a new tests and save
+    :param results_path: the folder where the results are saved
+    :param model_name: the name given to the results files
+    :param tol: the tolerance allowing the model to stop learning, when the training accuracy is (100 - tol)%
+    :param gpu: boolean defining the use of the gpu (if not cpu are used)
+    :param lr: the learning rate used by the optimizer
+    :return:
+        total training time (float)
+        epoch of best accuracy for the validation set (int)
+        parameters of the model corresponding to the epoch of best accuracy
+    """
+    if freeze:
+        for name, p in model.named_parameters():
+            p.requires_grad = False
+            
+        linear_model = nn.Sequential(nn.Linear(32 * 3 * 4 * 3, 128),
+                                    nn.Linear(128, 3)).to(device)
+ 
 
 
-    if args.gpu and torch.cuda.is_available():
-        device = torch.device('cuda')
-    else:
-        device = torch.device('cpu')
+    filename = path.join(results_path, 'performance.csv')
 
-    lr = args.learning_rate * 0.00005
+    criterion = nn.CrossEntropyLoss()
 
-    results_path = path.join(args.results_path, args.name)
-    if not path.exists(results_path):
-        os.makedirs(results_path)
-    #print("STARTING......")
-    composed = torchvision.transforms.Compose([GaussianSmoothing(sigma=args.sigma), ToTensor(gpu=args.gpu)])
-    train_path='/scratch/yx2105/shared/MLH/data/train.csv'
-    test_path='/scratch/yx2105/shared/MLH/data/test.csv'
-    valid_path='/scratch/yx2105/shared/MLH/data/val.csv'
-    sigma = 0
-    #composed = torchvision.transforms.Compose([GaussianSmoothing(sigma),])
-    trainset = BidsMriBrainDataset(train_path, transform=composed)
-    testset = BidsMriBrainDataset(test_path, transform=composed)
-    validset = BidsMriBrainDataset(valid_path, transform=composed)
+    results_df = pd.DataFrame(columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
+    with open(filename, 'w') as f:
+        results_df.to_csv(f, index=False, sep='\t')
+    #changed acc_valid to acc_train
+    t0 = time()
+    acc_valid_max = 0
+    best_epoch = 0
+    best_model = copy(model)
+    print('Before training epoch')
+    # The program stops when the network learnt the training data
+    epoch = 0
+    acc_valid = 0
+    model.train()
+    while epoch < epochs:# and acc_train < 100 - tol:
+        loss_train = []
+        predicted_list = []
+        truth_list = []
+        running_loss = 0
+        for i, data in enumerate(trainloader, 0):
+            inputs, labels = data['image'].to(device), data['diagnosis_after_12_months'].to(device)      
+            optimizer.zero_grad()
+            if 'joint' in classifier:
+                if freeze:
+                    img_features = model.classifier(inputs)
+                    outputs = linear_model(img_features)
+                else:
+                    tab_inputs = data['tab_data'].to(device)
+                    outputs = model(inputs, tab_inputs)
+                
+            else:
+                if freeze:
+                    img_features = model.feature_extractor(inputs)
+                    outputs = linear_model(img_features)
+                else:
+                    outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            
+            loss.backward()
+            optimizer.step()    
 
-    if args.classifier == 'basic':
-        classifier = DiagnosisClassifier(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'simonyan':
-        classifier = SimonyanClassifier(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'simple':
-        classifier = SimpleClassifier(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'basicgpu':
-        classifier = BasicGPUClassifier(n_classes=args.n_classes, dropout=args.dropout).to(device=device)
-    elif args.classifier == 'simpleLBP':
-        classifier = SimpleLBP(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'simpleLBCNN':
-        classifier = SimpleLBCNN(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'localbriefnet':
-        classifier = LocalBriefNet(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'localbriefnet2':
-        classifier = LocalBriefNet2(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'localbriefnet3':
-        classifier = LocalBriefNet3(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'vgg':
-        classifier = VGG(n_classes=args.n_classes).to(device=device)
-    elif args.classifier == 'cnn':
-        classifier = CNNModel(n_classes=args.n_classes).to(device=device)
-    elif 'joint' in args.classifier:
-        img_classifier = args.classifier.split('_')[-1]
-        classifier = joint_model(tab_in_shape = 49, enc_shape = 8, n_classes = 3, classifier=img_classifier).to(device=device)
-    else:
-        raise ValueError('Unknown classifier')
+            loss_train.append(loss.item())
 
-    import pickle
-    
-    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/train_pickle_1", "rb") as f:
-         train_list = pickle.load(f)
-    print("loaded train")
-    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/test_pickle_1", "rb") as f1:
-         test_list = pickle.load(f1)
-    print("loaded test")
+            # save for compute train acc
+            preds_score = F.softmax(outputs, 1)
+            _, predicted = torch.max(preds_score, 1)
+            predicted_list = predicted_list + predicted.tolist()
+            truth_list = truth_list + labels.tolist()
 
-    with open("/scratch/di2078/shared/MLH/data/MML-ADNI/main/valid_pickle_1", "rb") as f2:
-         valid_list = pickle.load(f2)
-    print("loaded valid")
+            # print statistics
+            running_loss += loss.item()
+            if i % 5 == 4:  # print every 10 mini-batches
+                print('Training epoch %d : step %d / %d loss: %f' %
+                      (epoch + 1,  i + 1, len(trainloader),running_loss))
+                running_loss = 0.0
         
-    trainset = MriDataset(train_list, None)
-    testset = MriDataset(test_list, None)
-    validset = MriDataset(valid_list, None)
-    # Initialization
-    classifier.apply(weights_init)
-    optimizer = optim.Adam(filter(lambda param: param.requires_grad, classifier.parameters()), lr=lr,weight_decay=1e-4)
+        print('Finished Epoch: %d' % (epoch + 1))
 
-    # Training
-    best_params = run(classifier, trainset, validset, testset, optimizer, device=device, batch_size=args.batch_size, epochs=args.epochs, phase=args.phase, results_path=results_path, model_name=args.name,
-                                   save_interval=args.save_interval, classifier = args.classifier, model_path = args.model_path)
+        # save performance
+        if results_path is not None and epoch % save_interval == save_interval - 1:
+            # compute train acc
+            acc_train = compute_balanced_accuracy(predicted_list, truth_list)
+            print('Training ACC: {}'.format(acc_train))
+
+            training_time = time() - t0
+            acc_valid, all_prediction_scores = test(model, validloader, device=device, classifier=classifier, freeze = freeze)
+
+            row = np.array([epoch + 1, training_time, np.mean(loss_train) , acc_train ,acc_valid
+                           ]).reshape(1, -1)
+
+            row_df = pd.DataFrame(row, columns=['epoch', 'training_time', 'loss_train', 'acc_train', 'acc_validation'])
+                                               
+            with open(filename, 'a') as f:
+                row_df.to_csv(f, header=False, index=False, sep='\t')
+
+            if acc_valid > acc_valid_max:
+                acc_valid_max = copy(acc_valid)
+                best_epoch = copy(epoch)
+                best_model = deepcopy(model)
+
+                torch.save(model.state_dict(), os.path.join(results_path,"checkpoint_best_val.ckpt"))
+                np.save(os.path.join(results_path,"predictions_best_val"), all_prediction_scores)
+        epoch += 1
+
+    return {'training_time': time() - t0,
+            'best_epoch': best_epoch,
+            'best_model': best_model,
+            'acc_valid_max': acc_valid_max
+           }
+
+
+def test(model, dataloader, device, verbose=True, classifier='vgg', freeze =False):
+    """
+    Computes the balanced accuracy of the model
+
+    :param model: the network (subclass of nn.Module)
+    :param dataloader: a dataloader wrapping a dataset
+    :param gpu: if True a gpu is used
+    :return: balanced accuracy of the model (float)
+    """
+    model.eval()
+    predicted_list = []
+    truth_list = []
+    all_prediction_scores = []
+    
+    # The test must not interact with the learning
+    with torch.no_grad():
+        for step, sample in enumerate(dataloader):
+            images, diagnoses = sample['image'].to(device), sample['diagnosis_after_12_months'].to(device)
+            if 'joint' in classifier:
+                if freeze:
+                    img_features = model.classifier(images)
+                    outputs = linear_model(img_features)
+                else:
+                    tab_inputs = sample['tab_data'].to(device)
+                    outputs = model(images, tab_inputs)
+            else:
+                if freeze:
+                    img_features = model.feature_extractor(images)
+                    outputs = linear_model(img_features)
+                else:
+                    outputs = model(images)
+
+            # save for compute train acc
+            pred_scores = F.softmax(outputs,1)
+
+            all_prediction_scores.append(pred_scores)
+            _, predicted = torch.max(pred_scores, 1)
+            predicted_list = predicted_list + predicted.tolist()
+            truth_list = truth_list + diagnoses.tolist()
+            print('Step {} / total {} processed'.format(step, len(dataloader)))
+
+    acc = compute_balanced_accuracy(predicted_list, truth_list)
+
+    if verbose:
+        print('Validation ACC: ' + str(acc))
+
+    all_prediction_scores = torch.cat(all_prediction_scores,0).cpu().data.numpy()
+
+    return acc, all_prediction_scores
+
+def compute_balanced_accuracy(predicted_list, truth_list):
+    # Computation of the balanced accuracy
+    component = len(np.unique(truth_list))
+
+    cluster_diagnosis_prop = np.zeros(shape=(component, component))
+    for i, predicted in enumerate(predicted_list):
+        truth = truth_list[i]
+        cluster_diagnosis_prop[predicted, truth] += 1
+
+    acc = 0
+    diags_represented = []
+    for i in range(component):
+        diag_represented = np.argmax(cluster_diagnosis_prop[i])
+        acc += cluster_diagnosis_prop[i, diag_represented] / np.sum(cluster_diagnosis_prop.T[diag_represented])
+        diags_represented.append(diag_represented)
+
+    acc = acc * 100 / component
+
+    return acc 
+
+def run(model, trainset, validset, testset, optimizer, device, batch_size=4, phase = 'training', **train_args):
+    from torch.utils.data import DataLoader
+
+
+    results_path = train_args['results_path']
+    t0 = time()
+
+    print('Length training set', len(trainset))
+    print('Length validation set', len(validset))
+    print('Length test set', len(testset))
+    #changed num_workers from 4 to batch_size
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4)# collate_fn=collate_func_img, pin_memory=True)
+    validloader = DataLoader(validset, batch_size=batch_size, shuffle=False, num_workers=4)# collate_fn=collate_func_img, pin_memory=True)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)# collate_fn=collate_func_img, pin_memory=True)
+    
+    print('Loading complete.')
+    
+    if phase == 'training':
+        if train_args['model_path'] != 'none':
+            
+            new_weights =  OrderedDict()
+            weights = torch.load(train_args['model_path'])
+            for i, name in enumerate(weights):
+                new_weights[name.replace('module.','')] = weights[name]
+
+            model.load_state_dict(new_weights)
+            
+        parameters_found = train(model, trainloader, validloader, optimizer, device, **train_args)
+
+    elif phase == 'inference':
+        weights = torch.load(train_args['model_path'])
+        model.load_state_dict(weights)
+        acc_test, all_prediction_scores = test(model, testloader, device=device, classifier = train_args['classifier'])
+
+        np.save(os.path.join(results_path,"predictions_best_test"), all_prediction_scores)
+        print('Accuracy on test set: %.2f %% \n' % acc_test)
+        
+
+    #acc_test = test(parameters_found['best_model'], testloader, train_args['gpu'], verbose=False)
+    #acc_valid = test(parameters_found['best_model'], validloader, train_args['gpu'], verbose=False)
+    #acc_train = test(parameters_found['best_model'], trainloader, device=device, verbose=False)
+
+    # text_file = open(path.join(train_args['results_path'], 'fold_output.txt'), 'w')
+    #     #text_file.write('Fold: %i \n' % (i + 1))
+    # text_file.write('Best epoch: %i \n' % (parameters_found['best_epoch'] + 1))
+    # text_file.write('Time of training: %d s \n' % parameters_found['training_time'])
+    # text_file.write('Accuracy on training set: %.2f %% \n' % acc_train)
+    # #text_file.write('Accuracy on validation set: %.2f %% \n' % acc_valid)
+    # #text_file.write('Accuracy on test set: %.2f %% \n' % acc_test)
+    # text_file.close()
+
+    # print('Accuracy of the network on the %i train images: %.2f %%' % (len(trainset), acc_train))
+    # #print('Accuracy of the network on the %i validation images: %.2f %%' % (len(validset), acc_valid))
+    # #print('Accuracy of the network on the %i test images: %.2f %%' % (len(testset), acc_test))
+
+    #     #accuracies[i] = acc_test
+
+    # training_time = time() - t0
+    # text_file = open(path.join(results_path, 'model_output.txt'), 'w')
+    # text_file.write('Time of training: %d s \n' % training_time)
+    # #text_file.write('Mean test accuracy: %.2f %% \n' % np.mean(accuracies))
+    # text_file.close()
